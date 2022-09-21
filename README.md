@@ -1,1 +1,2 @@
-AANanopore
+#Precise identification of twenty amino acids and discrimination of peptides with functionalized nanopore
+This repository contains the codes to detect and measure properties of ionic current blockades from a current vs time recording of single-molecule amino acid sequencing, as well as the scripts and algorithms for downstream artificial intelligence classification model and visualization. Developed by Chao Tang at the Lu Chen's Lab, Sichuan University, Chengdu, China.
