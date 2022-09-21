@@ -1,0 +1,59 @@
+---
+title: "Polypeptide sequencing"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+  code_folding: "hide"
+toc: true
+toc_depth: 4
+toc_float: 
+  collapsed: false
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(openxlsx)
+library(ggplot2)
+library(data.table)
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/混合氨基酸实验信息表20210517.xlsx"))
+meta[, file_name := gsub("2020_", "2020-", file_name)]
+setkey(meta, file_name)
+```
+
+```{r}
+files <- list.files("./analysis/05.MixedAA/Version1", ".xlsx", full.names = TRUE)
+Signals <- lapply(files, function(x) as.data.table(read.xlsx(x)))
+names(Signals) <- gsub(".xlsx", "", gsub("AA_Signals_", "", basename(files)))
+```
+
+
+```{r}
+Ps <- lapply(seq_along(Signals), function(i) {
+  ggplot(Signals[[i]], aes(x = Blockade, y = DwellTime)) + 
+    geom_point() + 
+    labs(title = meta[names(Signals)[i], amino_acid]) + 
+    theme_light(base_size = 15)
+})
+```
+
+```{r fig.width=15, fig.height=15}
+cowplot::plot_grid(plotlist = Ps, nrow = 5)
+```
+

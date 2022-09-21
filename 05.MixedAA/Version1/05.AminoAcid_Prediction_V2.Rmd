@@ -1,0 +1,175 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(parallel)
+library(caret)
+library(openxlsx)
+library(cowplot)
+```
+
+```{r}
+mean2 <- function(x, q1 = 0.25, q2 = 0.75) {
+  q <- quantile(x, c(q1, q2))
+  mean(x[x >= min(q) & x <= max(q)])
+}
+```
+
+```{r}
+set.seed(19)
+AA_Cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(AA_Cols) <- Biostrings::AA_STANDARD
+```
+
+```{r}
+xlsxfiles <- list.files("./analysis/05.MixedAA/Version1", ".xlsx", full.names = TRUE)
+Signalsfiles <- list.files("./analysis/05.MixedAA/Version1", ".Rds", full.names = TRUE)
+```
+
+# Signal transformation
+
+```{r}
+lapply(seq_along(xlsxfiles), function(i) {
+  Signal <- as.data.table(read.xlsx(xlsxfiles[i]))
+  Signal$ID <- paste0(gsub(".xlsx", "", basename(xlsxfiles[i])), "_", sprintf("%04d", seq_len(Signal[, .N])))
+  
+  BUBs <- readRDS(Signalsfiles[i])
+  names(BUBs) <- Signal$ID
+  BUBs <- mclapply(BUBs, function(x) {
+    basemean <- x[L == "B", mean2(pA)]
+    x[, pA := pA / basemean]
+    x[, Sm := NULL]
+    x[L == "U"]
+  }, mc.cores = 10)
+  
+  Signal$AllTime <- mapply(BUBs, FUN = function(x) x[, diff(range(Time))] * 1000)
+  
+  BinExp <- mclapply(BUBs, function(x) round(density(x[, pA], from = 0, to = 1, n = 200, adjust = 0.5)$y, 3), mc.cores = 10)
+  BinExp <- do.call(rbind, BinExp)
+  colnames(BinExp) <- paste0("X", sprintf("%03d", seq_len(ncol(BinExp))))
+  save(Signal, BinExp, file = paste0("./analysis/05.MixedAA/Version1_Signal_Transform/", gsub(".xlsx", ".RData", basename(xlsxfiles[i]))))
+})
+```
+
+# AA Prediction
+
+```{r}
+files <- list.files("./analysis/05.MixedAA/Version1_Signal_Transform", ".RData", full.names = TRUE)
+```
+
+```{r}
+lapply(seq_along(files), function(i) {
+  load(files[i])
+  Mat <- merge(as.data.table(BinExp, keep.rownames = "ID"), Signal[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+  Mat <- data.frame(Mat[, -1], row.names = Mat[[1]])
+  Mat <- na.omit(Mat)
+  
+  # RF predict
+  Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/01.Models", "RF_Density_Line_Ony_Fit", full.names = T)
+  Polypeptide1 <- mclapply(1:6, function(i) {
+    Fit <- readRDS(Models[i])
+    if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+    ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+    ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+    ppm[, Model := paste0("RF", i)]
+    ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+    return(ppm)
+  }, mc.cores = 6)
+  Polypeptide1 <- do.call(rbind, Polypeptide1)
+  Polypeptide1[, pred := as.character(pred)]
+  Polypeptide1[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+  Polypeptide1_RF <- copy(Polypeptide1)
+  
+  # KNN predict
+  Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/05.knn/01.Models", "knn_Density_Line_Ony_Fit", full.names = T)
+  Polypeptide1 <- mclapply(1:6, function(i) {
+    Fit <- readRDS(Models[i])
+    if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+    ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+    row.names(ROC_Test) <- row.names(subset.data.frame(Mat, AllTime > i & SignalSD < 4))
+    ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+    ppm[, Model := paste0("KNN", i)]
+    ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+    return(ppm)
+  }, mc.cores = 6)
+  Polypeptide1 <- do.call(rbind, Polypeptide1)
+  Polypeptide1[, pred := as.character(pred)]
+  Polypeptide1[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+  Polypeptide1_KNN <- copy(Polypeptide1)
+  
+  # CART predict
+  Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/06.CART/01.Models", "CART_Density_Line_Ony_Fit", full.names = T)
+  Polypeptide1 <- mclapply(1:6, function(i) {
+    Fit <- readRDS(Models[i])
+    if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+    ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+    row.names(ROC_Test) <- row.names(subset.data.frame(Mat, AllTime > i & SignalSD < 4))
+    ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+    ppm[, Model := paste0("CART", i)]
+    ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+    return(ppm)
+  }, mc.cores = 6)
+  
+  Polypeptide1 <- do.call(rbind, Polypeptide1)
+  Polypeptide1[, pred := as.character(pred)]
+  Polypeptide1[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+  Polypeptide1_CART <- copy(Polypeptide1)
+  
+  # Merge
+  Polypeptide1_iden <- lapply(1:6, function(i) {
+    RF_i <- Polypeptide1_RF[Model == paste0("RF", i), .(ID, Prob, AA)]
+    KNN_i <- Polypeptide1_KNN[Model == paste0("KNN", i), .(ID, Prob, AA)]
+    CART_i <- Polypeptide1_CART[Model == paste0("CART", i), .(ID, Prob, AA)]
+
+    RF_i <- RF_i[Prob >= 0, .(ID, AA)]
+    KNN_i <- KNN_i[Prob >= 0, .(ID, AA)]
+    CART_i <- CART_i[Prob >= 0, .(ID, AA)]
+    setnames(RF_i, "AA", "RF")
+    setnames(KNN_i, "AA", "KNN")
+    setnames(CART_i, "AA", "CART")
+    
+    Pred_i <- Reduce(function(x, y) merge(x, y, all = T), list(RF_i, KNN_i, CART_i))
+    Pred_i <- Pred_i[rowSums(is.na(Pred_i)) <= 1]
+    Pred_i <- na.omit(melt.data.table(Pred_i, id.vars = "ID", value.name = "AA"))[, .N, list(ID, AA)][N == 3]
+    
+    RF_i <- merge(Polypeptide1_RF[Model == paste0("RF", i), .(ID, DwellTime, Blockade, Prob)], Pred_i[, .(ID, AA)], by = "ID")
+    KNN_i <- merge(Polypeptide1_KNN[Model == paste0("KNN", i), .(ID, DwellTime, Blockade, Prob)], Pred_i[, .(ID, AA)], by = "ID")
+    CART_i <- merge(Polypeptide1_CART[Model == paste0("CART", i), .(ID, DwellTime, Blockade, Prob)], Pred_i[, .(ID, AA)], by = "ID")
+    
+    setnames(RF_i, "Prob", "RF")
+    setnames(KNN_i, "Prob", "KNN")
+    setnames(CART_i, "Prob", "CART")
+    merge(merge(RF_i, KNN_i, by = c("ID", "DwellTime", "Blockade", "AA")), CART_i)
+    
+    res <- Reduce(function(x, y) merge(x, y, by = c("ID", "DwellTime", "Blockade", "AA")), list(RF_i, KNN_i, CART_i))
+    data.table(Cutoff = paste0("C", i), res)
+  })
+  Polypeptide1_iden <- do.call(rbind, Polypeptide1_iden)
+  
+  save(Polypeptide1_iden, Polypeptide1_RF, Polypeptide1_KNN, Polypeptide1_CART, file = paste0("./analysis/05.MixedAA/Version1_Signal_Prediction/", gsub(".RData", "_V2.RData", basename(files[i]))))
+})
+```

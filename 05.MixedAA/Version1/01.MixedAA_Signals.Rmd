@@ -1,0 +1,200 @@
+---
+title: "Polypeptide sequencing"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+  code_folding: "hide"
+toc: true
+toc_depth: 4
+toc_float: 
+  collapsed: false
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+source("./script/02.PolypeptideSequencing/AdditionalFunctions.R")
+library(openxlsx)
+library(data.table)
+```
+
+```{r}
+DensityPeaksSignal <- function(Sig, adjust = 0.5, plot = TRUE) {
+  BaseLineMean <- Sig[L == "B", mean2(pA)]
+  L1 <- BaseLineMean * c(1 - c(0.11, 0.26))
+  
+  den <- density(x = Sig[pA < max(L1), pA], adjust = adjust)
+  Pks <- tryCatch(PeaksOfDensity(den), error = function(e) NULL)
+  while (is.null(Pks)) {
+    adjust <- adjust + 0.1
+    den <- density(x = Sig[pA < max(L1), pA], adjust = adjust)
+    Pks <- tryCatch(PeaksOfDensity(den), error = function(e) NA)
+  }
+  
+  if(!is.null(L1)) {
+    Pks <- Pks[Px > min(L1) & Px < max(L1)]
+  }
+  
+  while (nrow(Pks) > 1 & Pks[, max(Py)] / Pks[, sort(Py, decreasing = TRUE)][2] < 10) {
+    adjust <- adjust + 0.1
+    den <- density(x = Sig[pA < max(L1), pA], adjust = adjust)
+    Pks <- PeaksOfDensity(den)
+    
+    if(!is.null(L1)) {
+      Pks <- Pks[Px > min(L1) & Px < max(L1)]
+    }
+  }
+  
+  Pks <- Pks[which.max(Py)]
+  
+  StartTime <- Sig[L == "U", min(Time)]
+  TimeRatio <- Sig[L == "U", mean(Sm > Pks[, B1x] & Sm < Pks[, B2x])]
+  DwellTime <- Sig[L == "U", diff(range(Time)) * 1000] * TimeRatio
+  AllTime <- Sig[L == "U", diff(range(Time)) * 1000]
+  
+  if(Sig[, sum(L == "U" & pA > Pks[, B1x] & pA < Pks[, B2x])] >= 20) {
+    SignalMean <- Sig[L == "U" & pA > Pks[, B1x] & pA < Pks[, B2x], mean2(pA)]
+    SignalSD <- Sig[L == "U" & pA > Pks[, B1x] & pA < Pks[, B2x], sd(pA)]
+    
+    if(Sig[, sum(L == "U" & pA > SignalMean)] < 10) {
+      SignalMean <- NA
+      SignalSD <- NA
+    }
+  } else {
+    SignalMean <- NA
+    SignalSD <- NA
+  }
+  
+  Blockade <- 1 - SignalMean/BaseLineMean
+  
+  if(plot) {
+    par(mfrow = c(2, 2))
+    Sig[, plot(Time, pA, type = "s")]
+    Sig[, lines(Time, Sm, type = "s", col = 2, lwd = 1.5)]
+    abline(h = L1, col = 3)
+    
+    plot(den, main = paste0("Density, adjust = ", adjust))
+    Pks[, points(x = Px, Py, col = 2, pch = 16)]
+    Pks[, points(x = B1x, B1y, col = 3, pch = 16)]
+    Pks[, points(x = B2x, B2y, col = 3, pch = 16)]
+    abline(v = L1, col = 3)
+    
+    Sig[, plot(Time, pA, type = "s")]
+    Sig[, lines(Time, Sm, type = "s", col = 2, lwd = 1.5)]
+    abline(h = Pks[, B1x, B2x], col = 3)
+    
+    Sig[, plot(Time, pA, type = "s", main = paste0("Blockade = ", round(Blockade, 4), ", DwellTime = ", round(DwellTime, 3)))]
+    Sig[, lines(Time, Sm, type = "s", col = 2, lwd = 1.5)]
+    abline(h = SignalMean, col = 2)
+  } else {
+    data.table(StartTime, AllTime, TimeRatio, DwellTime, BaseLineMean, SignalMean, SignalSD, Blockade)
+  }
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/标准品混合物.xlsx"))
+meta[, file_name := gsub("2020_", "2020-", file_name)]
+abfs <- list.files("./data", pattern = "abf$", recursive = T)
+abfs <- abfs[grepl("^Username", basename(abfs))]
+meta[, filename := paste0("./data/ZhangMing_20210402/", file_name, ".abf")]
+```
+
+```{r}
+mclapply(seq_len(nrow(meta)), function(f) {
+  print(paste0(f, " of ", nrow(meta)))
+  filename <- meta[f, file_name]
+  File <- meta[f, filename]
+  StartTime <- as.numeric(meta[f, `start_time.(min)`])
+  EndTime <- as.numeric(meta[f, `end_time.(min)`])
+  base_mean <- tryCatch(as.numeric(meta[f, baseline_mean]), error = function(e) NA)
+  
+  phe <- readABF::readABF(File)
+  phe <- as.data.table(as.data.frame(phe))
+  colnames(phe) <- head(c("Time", "pA", "mV"), ncol(phe))
+  phe <- phe[Time > StartTime * 60 & Time < EndTime * 60, ]
+  
+  if(ncol(phe) == 3) {
+    phe <- phe[round(mV) == 50, ]
+  }
+  
+  phe <- phe[pA > 30, ]
+  phe <- phe[pA < 140, ]
+  phe$Sm <- KBins2(sig = phe$pA, pen.value = 1 - 1e-16, minseglen1 = 1, minseglen2 = 1)
+  
+  # L0 for BUB
+  adj <- 3.5
+  DenSm <- density(phe[, Sm], adjust = adj)
+  
+  if(is.na(base_mean)) {
+    L0 <- L0Coor(DenSm)
+  } else {
+    L0 <- L0Coor(DenSm, d = base_mean)
+  }
+  
+  while (anyNA(L0)) {
+    adj <- adj - 0.25
+    DenSm <- density(phe[, Sm], adjust = adj)
+    
+    if(is.na(base_mean)) {
+      L0 <- L0Coor(DenSm)
+    } else {
+      L0 <- L0Coor(DenSm, d = base_mean)
+    }
+  }
+  
+  L0Min <- min(max(L0) * 0.89, 100)
+  
+  pdf(paste0("./analysis/05.MixedAA/Version1/L0_Coord_", filename, ".pdf"))
+  plot(DenSm, main = paste0("adjust = ", adj))
+  abline(v = c(L0))
+  abline(v = L0Min, col = 2)
+  abline(v = base_mean, col = 3)
+  dev.off()
+  
+  # BUB
+  phe[, L := NULL]
+  phe[Sm <= max(L0) & Sm >= min(L0), L := "B"] # baseline
+  phe[Sm < L0Min, L := "U"] # U shape
+  phe[is.na(L), L := "O"] # Other
+  
+  BUB <- BUB_Sig(Mat = phe)
+  BUB <- BUB[mapply(function(x) max(x$Sm), BUB) <= max(L0)]
+  
+  # Baseline value filtering
+  L0F <- data.table(pA = mapply(function(x) x[L == "B", mean2(pA)], BUB))
+  rg <- quantile(L0F$pA, c(0.05, 0.95))
+  BUB <- BUB[L0F[, pA > min(rg) & pA < max(rg)]]
+  
+  # Baseline length filtering
+  BL_Sum <- mapply(BUB, FUN = function(x) sum(runLength(Rle(x[, L == "B"]))[runValue(Rle(x[, L == "B"])) == TRUE]))
+  BL_Min <- mapply(BUB, FUN = function(x) min(runLength(Rle(x[, L == "B"]))[runValue(Rle(x[, L == "B"])) == TRUE]))
+  BUB <- BUB[BL_Sum >= 500 & BL_Min >= 50]
+  
+  # Time filtering
+  Wid <- mapply(BUB, FUN = function(x) x[L == "U", diff(range(Time))])
+  BUB <- BUB[Wid > 0.00075]
+  
+  # AA Signal
+  Sigs <- lapply(BUB, FUN = function(x) tryCatch(DensityPeaksSignal(Sig = x, adjust = 0.1, plot = FALSE), error = function(e) NULL))
+  BUB <- BUB[!mapply(is.null, Sigs)]
+  Sigs <- do.call(rbind, Sigs)
+  
+  saveRDS(BUB, file = paste0("./analysis/05.MixedAA/Version1/BUB", filename, ".Rds"))
+  openxlsx::write.xlsx(Sigs, paste0("./analysis/05.MixedAA/Version1/AA_Signals_", filename, ".xlsx"))
+}, mc.cores = 15)
+```
+
