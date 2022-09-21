@@ -1,0 +1,204 @@
+---
+title: "Figure 3a"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+load(file = "./analysis/03.MachineLearning/01.data/Version6/AAInfo_RawSig.RData")
+```
+
+```{r}
+AAInfo[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(29)
+M_A <- RawSig[ID == AAInfo[aa == "A" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_A, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_A.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(3)
+M_S <- RawSig[ID == AAInfo[aa == "S" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_S, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_S.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(28)
+M_Y <- RawSig[ID == AAInfo[aa == "Y" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_Y, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_Y.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(30)
+M_M <- RawSig[ID == AAInfo[aa == "M" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_M, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_M.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(4)
+M_W <- RawSig[ID == AAInfo[aa == "W" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_W, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_W.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1}
+set.seed(1)
+M_P <- RawSig[ID == AAInfo[aa == "P" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]]
+ggplot(M_P, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1))
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/AA_P.pdf", height = 1.5, width = 1)
+```
+
+```{r fig.height=1.5, fig.width=1.2}
+set.seed(18)
+M_F <- RawSig[ID == AAInfo[aa == "F" & SignalSD < 3.5 & DwellTime > 7, sample(ID, 1)]]
+ggplot(M_F, aes(x = Time, y = pA)) + 
+  geom_line(size = 0.1) + 
+  theme_classic(base_size = 7) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) + 
+  labs(y = "Scaled current") + lims(y = c(0.6, 1)) -> p1
+p1
+```
+
+```{r fig.height=1.5, fig.width=1}
+ggplot(M_F, aes(x = pA)) + 
+  geom_density(size = 0.1) + 
+  coord_flip() + 
+  lims(x = c(0.6, 1)) + 
+  theme_classic() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(x = "Scaled current") -> p2
+p2
+```
+
+
+```{r fig.width=3, fig.height=1.5}
+layout <- c(
+  area(t = 1, b = 1, l = 1, r = 1),
+  area(t = 1, b = 1, l = 3, r = 3)
+)
+p1 + p2 + plot_layout(design = layout)
+```
+
+```{r fig.height=1.5, fig.width=1}
+ggplot(M_F, aes(x = pA)) + 
+  geom_density(size = 0.1) + 
+  coord_flip() + 
+  lims(x = c(0.6, 1)) + 
+  theme_classic() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  labs(x = "Scaled current") + 
+  geom_point(data = data.table(x = M_F_d$x, y = M_F_d$y), 
+             mapping = aes(x, y), colour = "red", size = 0.001) -> p3
+p3
+```
+
+```{r fig.width=2.5, fig.height=1.5}
+layout <- c(
+  area(t = 1, b = 1, l = 1, r = 2),
+  area(t = 1, b = 1, l = 4, r = 5)
+)
+p1 + p3 + plot_layout(design = layout)
+ggsave("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/Feature_extraction.pdf", height = 1.5, width = 2.5)
+```
+
+
+```{r fig.height=1.5, fig.width=1}
+for(i in 1:200) {
+  ggplot(RawSig[ID == AAInfo[aa == "P" & SignalSD < 3.5 & DwellTime > 2, sample(ID, 1)]], aes(x = Time, y = pA)) + 
+    geom_line(size = 0.1) + 
+    theme_bw() + 
+    theme(panel.grid = element_blank(), 
+          axis.title.x = element_blank(),
+          axis.text = element_blank(), 
+          axis.ticks = element_blank()) + 
+    labs(y = "Scaled current") + lims(y = c(0.6, 1)) -> pi
+  ggsave(plot = pi, paste0("./analysis/00.FigureTables/Jun23/Figure3/Figure3a/SampleAA/AA", i, ".pdf"), height = 1.5, width = 1)
+}
+```
+
+
+
+
