@@ -1,0 +1,212 @@
+---
+title: "AA signal"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(IRanges)
+library(RColorBrewer)
+```
+
+```{r}
+rootdir <- "/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/ZhangMing20210402"
+(files <- list.files(rootdir, "S010_Summa.txt", full.names = TRUE))
+```
+
+```{r}
+S010_Summa <- lapply(files, fread)
+for(i in seq_along(S010_Summa)) S010_Summa[[i]]$AA <- gsub("S010_Summa.txt", "", basename(files))[i]
+S010_Summa <- do.call(rbind, S010_Summa)
+
+# S010_Summa <- S010_Summa[File != "21201008"]
+```
+
+
+```{r fig.width=10, fig.height=4}
+ggplot(S010_Summa[DiffTime * 1000 < 20, ], aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = AA)) + 
+  geom_point(size = 0.3) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2)))
+```
+
+```{r fig.width=20, fig.height=16}
+ggplot(S010_Summa[DiffTime * 1000 < 10, ], aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = File)) + 
+  geom_point(size = 0.3) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2))) + 
+  facet_wrap( ~ AA)
+```
+
+```{r}
+Fs1 <- S010_Summa[, .(SD = sd(1 - L1Mean/L0Mean)), by = list(AA, File)][, .SD[which.min(SD), ], by = AA][, File]
+Fs2 <- S010_Summa[, .N, by = list(AA, File)][, .SD[which.max(N), ], by = AA][, File]
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(S010_Summa[DiffTime * 1000 < 20 & File %in% Fs1, ], aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = AA)) + 
+  geom_point(size = 0.3) + 
+  xlim(c(0.1, 0.26)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2)))
+```
+
+```{r fig.width=10, fig.height=4}
+library(ggrepel)
+Tab <- S010_Summa[DiffTime * 1000 < 20 & File %in% Fs2 & !AA %in% c("Ala", "Gln", "Lys", "Met"), ]
+Tab2 <- Tab[, .(x = median(1 - L1Mean/L0Mean), y = quantile(DiffTime, 0.99)), AA]
+ggplot(Tab, aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = AA)) + 
+  geom_point(size = 0.3) + 
+  geom_text_repel(data = Tab2, aes(x = x, y = y * 1000, label = AA), size = 6) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2)))
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(S010_Summa[DiffTime * 1000 < 20 & File %in% Fs1, ], aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = AA)) + 
+  geom_point(size = 0.3) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2))) + 
+  scale_color_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name = "Paired")))(18))
+```
+
+```{r fig.width=10, fig.height=4}
+library(ggrepel)
+Tab <- S010_Summa[DiffTime * 1000 < 20 & File %in% Fs1 & !AA %in% c("Ala", "Gln", "Lys", "Met"), ]
+Tab2 <- Tab[, .(x = median(1 - L1Mean/L0Mean), y = quantile(DiffTime, 0.99)), AA]
+ggplot(Tab, aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = AA)) + 
+  geom_point(size = 0.3) + 
+  geom_text_repel(data = Tab2, aes(x = x, y = y * 1000, label = AA), size = 6) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2))) + 
+  scale_color_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name = "Dark2")))(18))
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(S010_Summa[DiffTime * 1000 < 20 & File %in% Fs1 & !AA %in% c("Ala", "Gln", "Lys", "Met"), ], aes(x = 1 - L1Mean/L0Mean, colour = AA)) + 
+  geom_line(stat = "density", adjust = 1) + 
+  labs(x = "Blockade", y = "Density") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.1, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 1))) + 
+  scale_color_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name = "Paired")))(14))
+```
+
+```{r}
+S010_Summa <- S010_Summa[DiffTime * 1000 < 20 & File %in% Fs1 & !AA %in% c("Ala", "Gln", "Lys", "Met"), ]
+```
+
+```{r}
+AAs <- unique(S010_Summa[, AA])
+
+AreaDrop <- lapply(AAs, function(x) {
+  A1 <- x
+  A2 <- setdiff(AAs, x)
+  area <- mapply(A2, FUN = function(y) {
+    r1 <- S010_Summa[AA == x, 1 - L1Mean/L0Mean]
+    r2 <- S010_Summa[AA == y, 1 - L1Mean/L0Mean]
+    
+    Fn1 <- ecdf(r1) # a *function*
+    Fn2 <- ecdf(r2) # a *function*
+    
+    ad <- 1
+    fun1 <- function(x) density(r1, from = x, to = x, n = 1, adjust = ad)$y
+    fun2 <- function(x) density(r2, from = x, to = x, n = 1, adjust = ad)$y
+    solution <- tryCatch(uniroot(function(x) fun1(x) - fun2(x), interval<-c(min(c(r1, r2)), max(c(r1, r2))), tol = 1e-100, maxiter = 10000)$root, error = function(e) NA)
+    
+    while (is.na(solution)) {
+      ad <- ad + 1
+      fun1 <- function(x) density(r1, from = x, to = x, n = 1, adjust = ad)$y
+      fun2 <- function(x) density(r2, from = x, to = x, n = 1, adjust = ad)$y
+      solution <- tryCatch(uniroot(function(x) fun1(x) - fun2(x), interval<-c(min(c(r1, r2)), max(c(r1, r2))), tol = 1e-100, maxiter = 10000)$root, error = function(e) NA)
+    }
+    min(Fn1(solution), 1 - Fn1(solution))
+  })
+  area <- c(1, area)
+  names(area)[1] <- A1
+  return(area)
+})
+names(AreaDrop) <- AAs
+```
+
+
+```{r}
+AreaDropTab <- do.call(rbind, lapply(AreaDrop, function(x) as.data.table(as.data.frame(x), keep.rownames = "A2")))
+AreaDropTab$A1 <- rep(names(AreaDrop), mapply(length, AreaDrop))
+AreaDropMat <- dcast.data.table(AreaDropTab, A1 ~ A2, value.var = "x")
+AreaDropTab[x == 1, x := NA]
+AreaDropTab[, Percent := x * 100]
+```
+
+```{r fig.width=8, fig.height=6}
+ggplot(AreaDropTab, aes(x = A1, y = A2, fill = Percent)) + 
+  geom_tile() + 
+  geom_text(aes(label = round(Percent, 2))) +
+  scale_fill_gradient2(low = "red", high = "red", midpoint = 0.0001) + 
+  theme_classic(base_size = 15) + 
+  theme(axis.title = element_blank())
+```
+
+```{r}
+library(RColorBrewer)
+library(pheatmap)
+AreaDropMat <- data.frame(AreaDropMat[, -1], row.names = AreaDropMat[[1]])
+AreaDropMat <- AreaDropMat * 100
+```
+
+```{r fig.width=6, fig.height=6}
+fold <- (100 - max(AreaDropMat[AreaDropMat < 100]))/max(AreaDropMat[AreaDropMat < 100])
+n <- ceiling(max(AreaDropMat[AreaDropMat < 100]) * 100/1)
+
+color1 = colorRampPalette(brewer.pal(n = 9, name = "OrRd")[1:7])(n)
+color2 = colorRampPalette(brewer.pal(n = 9, name = "OrRd")[8])(n * fold)
+
+pheatmap(AreaDropMat, 
+         color = c("grey98", color1, color2), 
+         cluster_rows = FALSE, 
+         angle_col = 0, 
+         display_numbers = round(AreaDropMat, 2), 
+         cluster_cols = FALSE, 
+         legend = FALSE)
+```
+

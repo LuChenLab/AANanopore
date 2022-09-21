@@ -1,0 +1,215 @@
+---
+title: "AA"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(IRanges)
+library(RColorBrewer)
+library(ggrepel)
+source("/mnt/raid61/Personal_data/tangchao/AANanopore/script/01.AASignalRecognition/Version6/SignalProcessing/AdditionalFunctions.R")
+```
+
+```{r}
+Summs <- list.files("/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/Version6", "Signal_summary.txt", recursive = T, full.names = T)
+Summs <- lapply(Summs, fread)
+Summs <- Summs[mapply(nrow, Summs) > 10]
+```
+
+```{r}
+Summs <- do.call(rbind, Summs)
+```
+
+```{r fig.width=20, fig.height=16}
+ggplot(Summs, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(size = 0.3) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2))) + 
+  facet_wrap( ~ amino_acid)
+```
+
+```{r fig.width=20, fig.height=16}
+ggplot(Summs, aes(x = BsGussian, y = DwellTime * 1000)) + 
+  geom_point(size = 0.3) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2))) + 
+  facet_wrap( ~ amino_acid)
+```
+
+```{r fig.width=10, fig.height=4}
+Tab2 <- Summs[, .(x = median(Blockade), y = max(DwellTime) * 1.1), amino_acid]
+ggplot(Summs, aes(x = Blockade, y = DwellTime * 1000, colour = amino_acid)) + 
+  geom_point(size = 0.1) + 
+  geom_text(data = Tab2, aes(x = x, y = y * 1000, label = amino_acid), size = 6) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(values = ggsci::pal_igv()(18)) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2), ncol = 2))
+```
+
+```{r fig.width=10, fig.height=4}
+Tab2 <- Summs[, .(x = median(BsGussian), y = max(DwellTime) * 1.1), amino_acid]
+ggplot(Summs, aes(x = BsGussian, y = DwellTime * 1000, colour = amino_acid)) + 
+  geom_point(size = 0.1) + 
+  geom_text(data = Tab2, aes(x = x, y = y * 1000, label = amino_acid), size = 6) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(values = ggsci::pal_igv()(18)) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 2), ncol = 2))
+```
+
+
+```{r fig.width=10, fig.height=4}
+Tab2 <- Summs[, PeakCoor(Blockade, adjust = 2), by = amino_acid]
+ggplot(Summs, aes(x = Blockade, colour = amino_acid)) + 
+  geom_line(stat = "density", adjust = 2) + 
+  geom_text(data = Tab2, aes(x = x, y = y + 10, label = amino_acid), size = 6) +
+  labs(x = "Blockade", y = "Density") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 1), ncol = 2)) + 
+  # scale_color_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name = "Paired")))(14))
+  scale_colour_manual(values = ggsci::pal_igv()(18))
+```
+
+```{r fig.width=10, fig.height=4}
+Tab2 <- Summs[, PeakCoor(BsGussian, adjust = 2), by = amino_acid]
+ggplot(Summs, aes(x = BsGussian, colour = amino_acid)) + 
+  geom_line(stat = "density", adjust = 2) + 
+  geom_text(data = Tab2, aes(x = x, y = y + 10, label = amino_acid), size = 6) +
+  labs(x = "Blockade", y = "Density") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(1.2, "line"), 
+        legend.position = "right") + 
+  guides(colour = guide_legend(override.aes = list(size = 1), ncol = 2)) + 
+  # scale_color_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name = "Paired")))(18))
+  scale_colour_manual(values = ggsci::pal_igv()(18))
+```
+
+```{r}
+meta <- data.table(openxlsx::read.xlsx("/mnt/raid61/Personal_data/tangchao/AANanopore/data/meta_info_and_base_line_20210520.xlsx"))[, 1:9]
+meta <- unique(meta[, .(amino_acid, L1min, L1max)])
+meta <- meta[, .(BR = mean(c(L1min, L1max))), amino_acid]
+meta <- meta[order(BR), ]
+```
+
+```{r fig.width=4, fig.height=4}
+Tab <- Summs[, mean_sd(Blockade), by = amino_acid]
+setkey(Tab, y)
+Tab$amino_acid <- factor(Tab$amino_acid, levels = Tab$amino_acid)
+ggplot(Tab, 
+       aes(x = amino_acid, y = y, ymin = ymin, ymax = ymax)) + 
+  geom_pointrange(size = 0.3) + 
+  coord_flip() + 
+  theme_classic(base_size = 16) + 
+  theme(axis.title.y = element_blank()) + 
+  labs(y = "Blockade")
+```
+
+
+```{r}
+S010_Summa <- copy(Summs)
+setnames(S010_Summa, "amino_acid", "AA")
+```
+
+```{r}
+AAs <- unique(S010_Summa[, AA])
+
+AreaDrop <- lapply(AAs, function(x) {
+  A1 <- x
+  A2 <- setdiff(AAs, x)
+  area <- mapply(A2, FUN = function(y) {
+    r1 <- S010_Summa[AA == x, BsGussian]
+    r2 <- S010_Summa[AA == y, BsGussian]
+    DensityCrossArea(x1 = r1, x2 = r2, plot = F)
+  })
+  area <- c(1, area)
+  names(area)[1] <- A1
+  return(area)
+})
+names(AreaDrop) <- AAs
+```
+
+```{r}
+AreaDropTab <- do.call(rbind, lapply(AreaDrop, function(x) as.data.table(as.data.frame(x), keep.rownames = "A2")))
+AreaDropTab$A1 <- rep(names(AreaDrop), mapply(length, AreaDrop))
+AreaDropMat <- dcast.data.table(AreaDropTab, A1 ~ A2, value.var = "x")
+AreaDropTab[x == 1, x := NA]
+AreaDropTab[, Percent := x * 100]
+```
+
+```{r fig.width=10, fig.height=9}
+ggplot(AreaDropTab, aes(x = A1, y = A2, fill = Percent)) + 
+  geom_tile() + 
+  geom_text(aes(label = round(Percent, 2))) +
+  scale_fill_gradient2(low = "red", high = "red", midpoint = 0.0001) + 
+  theme_classic(base_size = 15) + 
+  theme(axis.title = element_blank())
+```
+
+```{r}
+AreaDropTab[Percent > 0, .(Mean = mean(Percent), Sum = sum(Percent)), by = A1][order(Mean), ]
+```
+
+```{r}
+library(RColorBrewer)
+library(pheatmap)
+AreaDropMat <- data.frame(AreaDropMat[, -1], row.names = AreaDropMat[[1]])
+AreaDropMat <- AreaDropMat * 100
+```
+
+```{r fig.width=8, fig.height=8}
+fold <- (100 - max(AreaDropMat[AreaDropMat < 100]))/max(AreaDropMat[AreaDropMat < 100])
+n <- ceiling(max(AreaDropMat[AreaDropMat < 100]) * 100/1)
+
+color1 = colorRampPalette(brewer.pal(n = 9, name = "OrRd")[1:7])(n)
+color2 = colorRampPalette(brewer.pal(n = 9, name = "OrRd")[8])(n * fold)
+
+pheatmap(AreaDropMat, 
+         color = c("grey98", color1, color2), 
+         cluster_rows = FALSE, 
+         angle_col = 0, 
+         display_numbers = round(AreaDropMat, 2), 
+         cluster_cols = FALSE, 
+         legend = FALSE)
+```
+

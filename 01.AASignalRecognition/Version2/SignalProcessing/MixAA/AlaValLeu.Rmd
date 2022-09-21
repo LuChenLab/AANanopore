@@ -1,0 +1,234 @@
+---
+title: "ala+val+leu"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+```
+
+```{r}
+library(readABF)
+library(data.table)
+library(S4Vectors)
+library(IRanges)
+library(changepoint)
+library(ggplot2)
+library(MASS)
+library(strucchange)
+library(ggpubr)
+source("/mnt/raid61/Personal_data/tangchao/AANanopore/script/01.AASignalRecognition/Version2/SignalProcessing/AdditionalFunctions.R")
+```
+
+```{r eval=FALSE}
+unique(fread("/mnt/raid61/Personal_data/tangchao/AANanopore/data/meta_all.txt", header = T)[[3]])
+```
+
+```{r}
+AA <- "ala+val+leu"
+```
+
+```{r}
+meta <- fread("/mnt/raid61/Personal_data/tangchao/AANanopore/data/meta_all.txt", header = T)
+
+Ptabf <- file.path("/mnt/raid61/Personal_data/tangchao/AANanopore/data/ZhangMing_20210402")
+OutDir <- file.path("/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/Version2/MixAA", gsub("+", "", AA))
+
+if(!dir.exists(OutDir)) dir.create(OutDir)
+file.remove(list.files(OutDir, full.names = T))
+
+meta <- meta[amino_acid == AA, ]
+meta <- na.omit(meta)
+```
+
+```{r}
+phe <- readABF::readABF(list.files(path = Ptabf, pattern = as.character(meta$file_name), full.names = T))
+phe <- as.data.table(as.data.frame(phe))
+colnames(phe) <- c("Time", "pA", "mV")
+phe <- phe[Time > meta$start_time * 60 & Time < meta$end_time * 60, ]
+
+phe <- phe[round(mV) == 50, ]
+phe <- phe[pA > 0, ]
+phe <- phe[pA < 130, ]
+phe$Sm <- KBins2(sig = phe$pA, pen.value = 1 - 1e-16, minseglen1 = 1, minseglen2 = 1)
+```
+
+```{r}
+DenSm <- density(phe[Sm < 130 & Sm >= 0, Sm], adjust = 1)
+
+L0 <- L0Coor(DenSm)
+L0Min <- min(L0) * 0.9
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current", xlim = c(90, 130))
+abline(v = L0, lty = 2, col = 2)
+```
+
+```{r}
+phe[, L := NULL]
+phe[Sm <= max(L0) & Sm >= min(L0), L := "B"] # baseline
+phe[Sm < L0Min, L := "U"] # U shape
+phe[is.na(L), L := "O"] # Other
+
+BUB <- BUB_Sig(Mat = phe)
+```
+
+```{r}
+length(BUB)
+```
+
+```{r}
+BUB <- BUB[mapply(function(x) max(x$Sm), BUB) <= max(L0)]
+BUB <- BUB[mapply(BUB, FUN = function(x) x[L == "B", .N]) >= 2000]
+```
+
+```{r}
+length(BUB)
+```
+
+```{r}
+variance <- mclapply(BUB, function(x) {
+  m <- x[L == "U", .N, Sm][which.max(N), Sm]
+  x[L == "U" & Sm == m, .(MAD = mad(pA), SD = sd(pA))]
+}, mc.cores = 10)
+variance <- do.call(rbind, variance)
+variance[, ID := 1:.N]
+variance <- variance[MAD < quantile(MAD, 0.95) & SD < quantile(SD, 0.95) & MAD < 2.5, ]
+BUB <- BUB[variance$ID]
+```
+
+```{r}
+length(BUB)
+```
+
+```{r}
+plotS <- function(x) {
+  ggplot() + 
+    geom_step(data = x, aes(x = Time, y = pA)) + 
+    geom_step(data = x, aes(x = Time, y = Sm), color = "red") + 
+    theme_classic(base_size = 15)
+}
+```
+
+```{r}
+plotS(BUB[[40]])
+```
+
+```{r}
+BUBs <- do.call(rbind, BUB)
+BUBs$ID <- rep(seq_along(BUB), mapply(nrow, BUB))
+```
+
+```{r}
+hist(BUBs$pA, breaks = 500)
+```
+
+```{r}
+hist(BUBs$Sm, breaks = 500)
+```
+
+```{r}
+BUB3 <- lapply(BUB, function(x) x[L == "U", 1 - pA/(x[L == "B", mean(pA)])])
+BUB3 <- data.table(Bs = do.call(c, BUB3))
+```
+
+```{r}
+ggplot(BUB3, aes(Bs)) +
+  geom_line(stat = "density", adjust = 1e-20) + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15)
+```
+
+```{r}
+purity <- function(x, w = 2, l = 20) { # here, w is the hight around the main stage, l is the length to include
+  sn <- x[L == "U", .N, Sm][N >= l, ]
+  mm <- sn[which.max(N), Sm]
+  sn[abs(Sm - mm) <= w, Sm := mm]
+  max(sn[, sum(N), Sm][, prop.table(V1)])
+}
+```
+
+```{r}
+puritys <- mapply(purity, BUB)
+hist(puritys, breaks = 200)
+```
+
+```{r}
+plotS(BUB[[which(puritys < 0.6)[2]]])
+```
+
+```{r fig.width=10, fig.height=15}
+ps <- lapply(1:10, function(i) plotS(BUB[[which(round(puritys, 2) < 1)[i]]]))
+cowplot::plot_grid(plotlist = ps, nrow = 5)
+```
+
+```{r fig.width=10, fig.height=15}
+ps <- lapply(31:40, function(i) plotS(BUB[[which(round(puritys, 2) == 1)[i]]]))
+cowplot::plot_grid(plotlist = ps, nrow = 5)
+```
+
+```{r}
+BUB <- BUB[puritys == 1]
+```
+
+```{r}
+length(BUB)
+```
+
+```{r}
+BUBs <- do.call(rbind, BUB)
+BUBs$ID <- rep(seq_along(BUB), mapply(nrow, BUB))
+```
+
+```{r}
+hist(BUBs$pA, breaks = 500)
+```
+
+```{r}
+hist(BUBs$Sm, breaks = 500)
+```
+
+
+```{r}
+BUB3 <- lapply(BUB, function(x) x[L == "U", 1 - pA/(x[L == "B", mean(pA)])])
+BUB3 <- data.table(Bs = do.call(c, BUB3))
+```
+
+```{r}
+ggplot(BUB3, aes(Bs)) +
+  geom_line(stat = "density", adjust = 1e-20) + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15)
+```
+
+```{r}
+mclapply(BUB, function(x) {
+  sn <- x[L == "U", .N, Sm][which.max(N), Sm]
+  Blockade <- 1 - x[L == "U" & Sm == sn, median(pA)]/x[L == "B", median(pA)]
+  DwellTime <- x[L == "U", diff(range(Time))]
+  data.table(Blockade = Blockade, DwellTime = DwellTime)
+}, mc.cores = 10) -> Summ
+Summ <- do.call(rbind, Summ)
+```
+
+```{r}
+ggplot(Summ, aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  theme_classic(base_size = 15)
+```
+

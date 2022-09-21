@@ -1,0 +1,617 @@
+---
+title: "Asp"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+```
+
+```{r}
+source("/mnt/raid61/Personal_data/tangchao/AANanopore/script/01.AASignalRecognition/Version6/SignalProcessing/AdditionalFunctions.R")
+```
+
+```{r eval=FALSE}
+sort(unique(openxlsx::read.xlsx("/mnt/raid61/Personal_data/tangchao/AANanopore/data/meta_info_and_base_line_20210525.xlsx")[[3]]))
+```
+
+```{r}
+AA <- "Asp"
+```
+
+```{r}
+meta <- data.table(openxlsx::read.xlsx("/mnt/raid61/Personal_data/tangchao/AANanopore/data/meta_info_and_base_line_20210525.xlsx"))[, 1:9]
+
+Ptabf <- file.path("/mnt/raid61/Personal_data/tangchao/AANanopore/data/ZhangMing_20210402")
+OutDir <- file.path("/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/Version6", AA)
+
+if(!dir.exists(OutDir)) dir.create(OutDir)
+# file.remove(list.files(OutDir, full.names = T))
+
+meta <- meta[amino_acid == AA, ]
+meta <- na.omit(meta)
+DT::datatable(meta)
+```
+
+```{r}
+meta[, file_name := as.character(file_name)]
+L1Min <- unique(meta[, L1min])
+L1Max <- unique(meta[, L1max])
+```
+
+# BUB signal finding
+
+```{r}
+BUBs <- mclapply(seq_len(nrow(meta)), function(i) {
+  File <- meta[,file_name][i]
+  StartTime <- meta[,start_time][i]
+  EndTime <- meta[,end_time][i]
+  
+  phe <- readABF::readABF(list.files(path = Ptabf, pattern = as.character(File), full.names = T))
+  phe <- as.data.table(as.data.frame(phe))
+  colnames(phe) <- c("Time", "pA", "mV")
+  phe <- phe[Time > StartTime * 60 & Time < EndTime * 60, ]
+  
+  phe <- phe[round(mV) == 50, ]
+  phe <- phe[pA > 0, ]
+  phe <- phe[pA < 130, ]
+  phe$Sm <- KBins2(sig = phe$pA, pen.value = 1 - 1e-16, minseglen1 = 1, minseglen2 = 1)
+  
+  DenSm <- density(phe[, Sm], adjust = 1)
+  
+  L0 <- L0Coor(DenSm)
+  L0Min <- min(L0) * 0.9
+  
+  pdf(paste0(file.path(OutDir, File), "_L0_Coordinate.pdf"))
+  plot(DenSm, xlab = "Current (pA)", main = "density of smooth current", xlim = c(90, 130))
+  abline(v = L0, lty = 2, col = 2)
+  dev.off()
+  
+  # if(ConfusedL0(DenSm) < 0.2) {
+  #   return(NULL)
+  # }
+  
+  phe[, L := NULL]
+  phe[Sm <= max(L0) & Sm >= min(L0), L := "B"] # baseline
+  phe[Sm < L0Min, L := "U"] # U shape
+  phe[is.na(L), L := "O"] # Other
+  
+  BUB <- BUB_Sig(Mat = phe)
+  BUB <- BUB[mapply(function(x) max(x$Sm), BUB) <= max(L0)]
+  return(BUB)
+}, mc.cores = nrow(meta))
+```
+
+```{r}
+names(BUBs) <- meta[, file_name]
+saveRDS(BUBs, file = file.path(OutDir, "BUB.Rds"))
+```
+
+```{r eval=FALSE}
+BUBs <- readRDS(file.path(OutDir, "BUB.Rds"))
+```
+
+```{r}
+BUBs <- BUBs[mapply(length, BUBs) > 20]
+```
+
+```{r}
+mapply(length, BUBs)
+```
+
+```{r}
+for(i in seq_along(BUBs)) names(BUBs[[i]]) <- paste0(names(BUBs)[i], "_", seq_along(BUBs[[i]]))
+names(BUBs) <- NULL
+BUBs <- do.call(c, BUBs)
+for(i in seq_along(BUBs)) BUBs[[i]]$File <- names(BUBs)[i]
+```
+
+```{r}
+length(BUBs)
+```
+
+# Filtering
+## Before filtering
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(do.call(rbind, BUBs)$pA, probability = T, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+abline(v = c(L1Min, L1Max), col = 2)
+```
+
+## Baseline length filtering
+Here, we need the minimum length of baseline are 500.     
+
+```{r}
+BUBs <- BUBs[mapply(BUBs, FUN = function(x) min(width(IRanges(x[, L == "B"])))) >= 500]
+```
+
+```{r}
+length(BUBs)
+```
+
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(do.call(rbind, BUBs)$pA, probability = T, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+abline(v = c(L1Min, L1Max), col = 2)
+```
+
+## Baseline value filtering
+For each file, we remove the signal that the baseline deviates from the average value.    
+
+```{r}
+SigFile <- data.table(ID = names(BUBs), File = mapply(function(x) x[1], strsplit(names(BUBs), "_")))
+
+L0tu <- mclapply(SigFile[, unique(File)], function(f) {
+  id <- SigFile[File == f, ID]
+  bubf <- BUBs[id]
+  L0F <- data.table(Sid = names(bubf), 
+                    pA = mapply(function(x) x[L == "B", mean(pA)], bubf), 
+                    Sm = mapply(function(x) x[L == "B", mean(Sm)], bubf))
+  # rg <- CISelect(L0F$Sm)
+  rg <- quantile(L0F$Sm, c(0.05, 0.95))
+  L0F[Sm > min(rg) & Sm < max(rg), Sid]
+}, mc.cores = length(SigFile[, unique(File)]))
+L0tu <- do.call(c, L0tu)
+```
+
+```{r}
+length(L0tu)
+```
+
+```{r}
+BUBs <- BUBs[L0tu]
+```
+
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(do.call(rbind, BUBs)$pA, probability = T, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+abline(v = c(L1Min, L1Max), col = 2)
+```
+
+## Variance of signal filtering
+
+```{r}
+variance <- mclapply(BUBs, function(x) {
+  m <- x[L == "U", .N, Sm][which.max(N), Sm]
+  x[L == "U" & Sm == m, .(MDA = mad2(pA), SD = sd(pA))]
+}, mc.cores = 10)
+variance <- do.call(rbind, variance)
+variance[, ID := 1:.N]
+```
+
+```{r fig.width=10, fig.height=5}
+par(mfrow = c(1, 2))
+hist(variance$MDA, breaks = 200, main = "MAD", xlab = "MAD")
+abline(v = variance[, quantile(MDA, 0.75)], col = 2, lty = 2)
+hist(variance$SD, breaks = 200, main = "SD", xlab = "SD")
+abline(v = variance[, quantile(SD, 0.75)], col = 2, lty = 2)
+```
+
+```{r}
+mean(variance[, MDA < quantile(MDA, 0.75) & SD < quantile(SD, 0.75)])
+sum(variance[, MDA < quantile(MDA, 0.75) & SD < quantile(SD, 0.75)])
+```
+
+```{r}
+BUBs <- BUBs[variance[MDA < quantile(MDA, 0.75) & SD < quantile(SD, 0.75), ID]]
+```
+
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(do.call(rbind, BUBs)$pA, probability = T, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+abline(v = c(L1Min, L1Max), col = 2)
+```
+
+## Purity filtering
+We only keep the signal with one step.
+
+```{r}
+puritys <- mcmapply(purity, BUBs, mc.cores = 10)
+hist(puritys, breaks = 200)
+mean(puritys == 1)
+```
+
+```{r}
+BUBs <- BUBs[puritys == 1]
+```
+
+```{r}
+length(BUBs)
+```
+
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(do.call(rbind, BUBs)$pA, probability = T, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+abline(v = c(L1Min, L1Max), col = 2)
+```
+
+# L1 identification
+
+## Current density 
+
+```{r}
+BUB_Tab <- do.call(rbind, BUBs)
+```
+
+## Blockade density
+
+```{r}
+BUB3 <- lapply(BUBs, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])])
+BUB3 <- data.table(Bs = do.call(c, BUB3), File = rep(names(BUBs), mapply(length, BUB3)))
+BUB3$File <- mapply(function(x) x[1], strsplit(BUB3$File, "_"))
+```
+
+```{r}
+ggplot(BUB3, aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15) + 
+  geom_vline(xintercept = c(L1Min, L1Max), lty = 3, alpha = 0.3)
+```
+
+## L1 coordinates
+
+```{r}
+BRs <- BUB3$Bs
+adj = 1
+DenSm <- density(BRs, adjust = adj)
+L1 <- L1Coor(DenSm, MinBR = L1Min, MaxBR = L1Max)
+
+while(length(L1) != 2) {
+  adj <- adj - 0.1
+  DenSm <- density(BRs, adjust = adj)
+  L1 <- L1Coor(DenSm, MinBR = L1Min, MaxBR = L1Max)
+}
+L1
+```
+
+```{r fig.width=15, fig.height=4}
+ggplot(BUB3, aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15) + 
+  geom_vline(xintercept = L1) + 
+  scale_color_brewer(palette = "Dark2") -> p1
+
+ggplot(BUB3[Bs > min(L1) & Bs < max(L1), ], aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  geom_vline(xintercept = L1) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(legend.position = "none") -> p2
+
+ggplot(BUB3[Bs > min(L1) & Bs < max(L1), ], aes(x = File, y = Bs, color = File)) +
+  geom_boxplot() + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "none") -> p3
+cowplot::plot_grid(p1, p2, p3, nrow = 1, rel_widths = c(2, 1, 1))
+```
+
+## L1 correction
+
+```{r}
+(CI <- CISelect(BUB3[Bs > min(L1) & Bs < max(L1), Bs]))
+```
+
+```{r fig.width=15, fig.height=4}
+ggplot(BUB3[Bs > min(CI) & Bs < max(CI), ], aes(Bs, color = File)) +
+  geom_line(stat = "density", adjust = 2) + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  lims(x = L1) -> p1
+
+ggplot(BUB3[Bs > min(CI) & Bs < max(CI), ], aes(x = File, y = Bs, color = File)) +
+  geom_boxplot() + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) -> p2
+cowplot::plot_grid(p1, p2, nrow = 1)
+```
+
+## Gaussian fitting
+
+```{r}
+BUB3 <- BUB3[Bs > min(CI) & Bs < max(CI), ]
+fit <- BUB3[, fitdistr(Bs, "normal")]
+para <- fit$estimate
+hist(BUB3$Bs, prob = TRUE, breaks = 20, xlab = "Blockade of L1", main = "Histogram of L1 blockade")
+x <- BUB3$Bs
+curve(dnorm(x, para[1], para[2]), col = 2, add = TRUE)
+set.seed(123)
+BUB3$BsGussian <- sort(rnorm(BUB3$Bs, para[1], para[2]))[rank(BUB3$Bs)]
+```
+
+```{r}
+para
+```
+
+```{r}
+hist(BUB3$BsGussian, prob = TRUE, 
+     breaks = 1000, 
+     xlim = c(0.1, 0.3), 
+     xlab = "Gussian blockade of L1", 
+     main = "Histogram of L1 gussian blockade")
+# abline(v = CI)
+abline(v = BUB3[, quantile(BsGussian, c(0.05, 0.95))], col = 2)
+```
+
+```{r}
+summary(lm(Bs ~ BsGussian, data = BUB3))
+```
+
+```{r}
+(L1 <- BUB3[, quantile(BsGussian, c(0.05, 0.95))])
+```
+
+# Filtering after L1 determined
+
+## Remove any signal beyond L1
+
+```{r}
+mcmapply(BUBs, FUN = function(x) {
+  sn <- x[L == "U", .N, Sm][which.max(N), Sm]
+  L1R <- x[L == "B", mean2(pA)] * (1 - L1)
+  sn >= min(L1R) & sn <= max(L1R)
+}, mc.cores = 10) -> InL1
+mean(InL1)
+sum(InL1)
+```
+
+```{r}
+BUBs2 <- BUBs[InL1]
+```
+
+# L1 identification of BUB2
+## Current density
+
+```{r}
+BUB_Tab <- do.call(rbind, BUBs2)
+```
+
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+hist(BUB_Tab[, pA], probability = TRUE, breaks = 500, xlab = "Current of BUB", main = "Histogram of BUB current")
+hist(do.call(c, mclapply(BUBs2, function(x) x[L != "B", 1 - pA/(x[L == "B", mean2(pA)])], mc.cores = 10)), 
+     probability = T, breaks = 500, xlab = "Blockade of BUB", main = "Histogram of BUB blockade")
+```
+
+## Blockade density
+
+```{r}
+BUB3 <- lapply(BUBs2, function(x) x[L != "B", 1 - pA/(x[L == "B", mean(pA)])])
+BUB3 <- data.table(Bs = do.call(c, BUB3), File = rep(names(BUBs2), mapply(length, BUB3)))
+BUB3$File <- mapply(function(x) x[1], strsplit(BUB3$File, "_"))
+```
+
+```{r}
+ggplot(BUB3, aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15)
+```
+
+## L1 coordinates
+
+```{r}
+BRs <- BUB3$Bs
+adj = 1
+DenSm <- density(BRs, adjust = adj)
+
+while (ConfusedL1(DenSm) < 0.6) {
+  adj = adj + 0.1
+  DenSm <- density(BRs, adjust = adj)
+}
+
+L1 <- L1Coor(DenSm, MinBR = L1Min, MaxBR = L1Max)
+
+while (anyNA(L1)) {
+  adj = adj - 0.1
+  DenSm <- density(BRs, adjust = adj)
+  L1 <- L1Coor(DenSm, MinBR = L1Min, MaxBR = L1Max)
+}
+L1
+```
+
+```{r fig.width=15, fig.height=4}
+ggplot(BUB3, aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of BUB") + 
+  theme_classic(base_size = 15) + 
+  geom_vline(xintercept = L1) -> p1
+
+ggplot(BUB3[Bs > min(L1) & Bs < max(L1), ], aes(Bs, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  geom_vline(xintercept = L1) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(legend.position = "none") -> p2
+
+ggplot(BUB3[Bs > min(L1) & Bs < max(L1), ], aes(x = File, y = Bs, color = File)) +
+  geom_boxplot() + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1), 
+        legend.position = "none") -> p3
+cowplot::plot_grid(p1, p2, p3, nrow = 1, rel_widths = c(2, 1, 1))
+```
+
+## L1 correction
+
+```{r}
+(CI <- CISelect(BUB3[Bs > min(L1) & Bs < max(L1), Bs]))
+```
+
+```{r fig.width=15, fig.height=4}
+ggplot(BUB3[Bs > min(CI) & Bs < max(CI), ], aes(Bs, color = File)) +
+  geom_line(stat = "density", adjust = 2) + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  lims(x = L1) -> p1
+
+ggplot(BUB3[Bs > min(CI) & Bs < max(CI), ], aes(x = File, y = Bs, color = File)) +
+  geom_boxplot() + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) -> p2
+cowplot::plot_grid(p1, p2, nrow = 1)
+```
+
+## Gaussian fitting
+
+```{r}
+BUB3 <- BUB3[Bs > min(CI) & Bs < max(CI), ]
+fit <- BUB3[, fitdistr(Bs, "normal")]
+para <- fit$estimate
+hist(BUB3[, ]$Bs, prob = TRUE, breaks = 20, xlab = "Blockade of L1", main = "Histogram of L1 blockade")
+x <- BUB3$Bs
+curve(dnorm(x, para[1], para[2]), col = 2, add = TRUE)
+set.seed(123)
+BUB3$BsGussian <- sort(rnorm(BUB3$Bs, para[1], para[2]))[rank(BUB3$Bs)]
+```
+
+```{r}
+para
+```
+
+```{r}
+hist(BUB3$BsGussian, prob = TRUE, 
+     breaks = 1000, 
+     xlim = c(0.1, 0.3), 
+     xlab = "Gussian blockade of L1", 
+     main = "Histogram of L1 gussian blockade")
+# abline(v = CI)
+abline(v = BUB3[, quantile(BsGussian, c(0.05, 0.95))], col = 2)
+```
+
+```{r}
+(L1 <- BUB3[, quantile(BsGussian, c(0.05, 0.95))])
+```
+
+```{r}
+summary(lm(Bs ~ BsGussian, data = BUB3))
+```
+
+```{r}
+UN <- mapply(BUBs2, FUN = function(x) {
+  x[L == "U", .N, Sm][, max(N)]
+})
+BUBs2 <- BUBs2[UN > quantile(UN, 0.01)]
+```
+
+```{r}
+saveRDS(BUBs2, file = file.path(OutDir, "BUB_filter.Rds"))
+```
+
+# Summary
+
+```{r}
+mclapply(BUBs2, function(x) {
+  # sn <- x[L == "U", .N, Sm][which.max(N), Sm]
+  # Blockade <- 1 - x[L == "U" & Sm == sn, mean2(pA)]/x[L == "B", mean2(pA)]
+  # DwellTime <- x[L == "U" & Sm == sn, range(Time)]
+  # Blockade <- 1 - x[L == "U", median(Sm)]/x[L == "B", mean2(pA)]
+  # Blockade <- 1 - x[L == "U", mean2(pA, q1 = 0.4, q2 = 0.6)]/x[L == "B", mean2(pA, q1 = 0.4, q2 = 0.6)]
+  Blockade <- 1 - x[L == "U", median(Sm)]/x[L == "B", mean2(pA, q1 = 0.4, q2 = 0.6)]
+  DwellTime <- x[L == "U", range(Time)]
+  data.table(File = x[, unique(File)], Start = min(DwellTime), End = max(DwellTime), Blockade = Blockade, DwellTime = diff(DwellTime))
+}, mc.cores = 10) -> Summ
+Summ <- do.call(rbind, Summ)
+Summ$Signal <- mapply(function(x) x[2], strsplit(Summ$File, "_"))
+Summ$File <- mapply(function(x) x[1], strsplit(Summ$File, "_"))
+Summ <- na.omit(Summ)
+```
+
+```{r fig.width=10, fig.height=5}
+ggplot(Summ, aes(x = Blockade, y = DwellTime, color = File)) + 
+  geom_point() + 
+  theme_classic2(base_size = 15) + 
+  lims(x = c(0.1, 0.3)) -> p1
+ggplot(Summ, aes(x = Blockade, y = DwellTime, color = File)) + 
+  geom_point() + 
+  theme_classic2(base_size = 15) + 
+  lims(x = c(0.1, 0.3)) + 
+  facet_wrap( ~ File) + 
+  theme(legend.position = "none") -> p2
+
+cowplot::plot_grid(p1, p2, nrow = 1)
+```
+
+```{r fig.width=10, fig.height=5}
+ggplot(Summ, aes(Blockade, color = File)) +
+  geom_line(stat = "density") + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) -> p1
+
+ggplot(Summ, aes(Blockade, color = File)) +
+  geom_line(stat = "density", adjust = 3) + 
+  labs(x = "Blockade of L1") + 
+  theme_classic(base_size = 15) -> p2
+cowplot::plot_grid(p1, p2, nrow = 1)
+```
+
+```{r}
+fit <- Summ[, fitdistr(Blockade, "normal")]
+para <- fit$estimate
+hist(Summ[, Blockade], prob = TRUE, breaks = 7, xlab = "Blockade of L1", main = "Histogram of L1 blockade")
+x <- BUB3$Blockade
+curve(dnorm(x, para[1], para[2]), col = 2, add = TRUE)
+set.seed(123)
+Summ$BsGussian <- sort(rnorm(Summ$Blockade, para[1], para[2]))[rank(Summ$Blockade)]
+```
+
+```{r}
+para
+```
+
+```{r}
+hist(Summ$BsGussian, prob = TRUE, 
+     breaks = 20, 
+     xlim = c(0.1, 0.3), 
+     xlab = "Gussian blockade of L1", 
+     main = "Histogram of L1 gussian blockade")
+```
+
+```{r}
+summary(lm(Blockade ~ BsGussian, data = Summ))
+```
+
+```{r}
+Summ <- merge(Summ, meta, by.x = "File", by.y = "file_name")
+```
+
+```{r}
+fwrite(Summ, file = file.path(OutDir, "Signal_summary.txt"), sep = "\t", row.names = F, quote = F)
+```

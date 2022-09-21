@@ -1,0 +1,642 @@
+---
+title: "AA signal"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(IRanges)
+```
+
+# Load data
+
+```{r}
+rootdir <- "/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/ZhangMing20210402"
+AA <- "Trp"
+list.files(file.path(rootdir, AA))
+```
+
+```{r}
+(BUBs <- list.files(file.path(rootdir, AA), "Rds", full.names = TRUE))
+```
+
+# 21306010
+
+```{r}
+BUB21306010 <- readRDS(BUBs[1])
+for(i in seq_along(BUB21306010)) BUB21306010[[i]]$aa <- i
+```
+
+```{r}
+BUBTab21306010 <- do.call(rbind, BUB21306010)
+```
+
+```{r}
+hist(BUBTab21306010$pA, breaks = diff(range(BUBTab21306010$pA))/0.1, main = "Histogram of current", xlab = "Current (pA)")
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- BUB21306010[[4]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21306010[, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L0 <- range(DenSmTab[start(gr):end(gr), x]))
+(L0Min <- mean(L0) * 0.9)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21306010[pA < L0Min, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L1 <- range(DenSmTab[start(gr):end(gr), x]))
+(L1Min <- mean(L1) * 0.90)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21306010[pA < L1Min, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L2 <- range(DenSmTab[start(gr):end(gr), x]))
+```
+
+```{r}
+S010 <- mapply(BUB21306010, FUN = function(x) {
+  current <- x[Sm < min(L0), pA]
+  if(min(current) > max(L2) & mean(current >= min(L1) & current <= max(L1)) > 0.3) {
+    "010"
+  } else {
+    NA
+  }
+})
+
+S010_21306010 <- BUB21306010[!is.na(S010)]
+length(S010_21306010)
+```
+
+```{r}
+S010_21306010_Summa <- lapply(S010_21306010, function(x) {
+  L0Mean <- x[L == "B", mean(pA)]
+  # x[S == 1, mean(pA)]
+  L1Mean <- x[pA >= min(L1) & pA <= max(L1), mean(pA)]
+  DiffTime <- x[pA >= min(L1) & pA <= max(L1), diff(range(Time))]
+  data.table(L0Mean, L1Mean, DiffTime)
+})
+S010_21306010_Summa <- do.call(rbind, S010_21306010_Summa)
+```
+
+```{r}
+S010_21306010_Summa[, hist(x = 1 - L1Mean/L0Mean, breaks = 20)]
+S010_21306010_Summa[, plot(x = 1 - L1Mean/L0Mean, y = DiffTime, xlim = c(0.1, 0.3), pch = 16)]
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- S010_21306010[[21]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) +
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) +
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) +
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+
+# 21307003
+
+```{r}
+(BUBs <- list.files(file.path(rootdir, AA), "Rds", full.names = TRUE))
+```
+
+```{r}
+BUB21307003 <- readRDS(BUBs[2])
+for(i in seq_along(BUB21307003)) BUB21307003[[i]]$aa <- i
+```
+
+```{r}
+BUBTab21307003 <- do.call(rbind, BUB21307003)
+```
+
+```{r}
+hist(BUBTab21307003$pA, breaks = diff(range(BUBTab21307003$pA))/0.1, main = "Histogram of current", xlab = "Current (pA)")
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- BUB21307003[[4]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307003[, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+# 
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L0 <- range(DenSmTab[start(gr):end(gr), x]))
+(L0Min <- mean(L0) * 0.9)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307003[pA < L0Min, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L1 <- range(DenSmTab[start(gr):end(gr), x]))
+(L1Min <- mean(L1) * 0.90)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307003[pA < L1Min, pA], adjust = 2)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L2 <- range(DenSmTab[start(gr):end(gr), x]))
+```
+
+```{r}
+S010 <- mapply(BUB21307003, FUN = function(x) {
+  current <- x[Sm < min(L0), pA]
+  if(min(current) > max(L2) & mean(current >= min(L1) & current <= max(L1)) > 0.3) {
+    "010"
+  } else {
+    NA
+  }
+})
+
+S010_21307003 <- BUB21307003[!is.na(S010)]
+length(S010_21307003)
+```
+
+```{r}
+S010_21307003_Summa <- lapply(S010_21307003, function(x) {
+  L0Mean <- x[L == "B", mean(pA)]
+  # x[S == 1, mean(pA)]
+  L1Mean <- x[pA >= min(L1) & pA <= max(L1), mean(pA)]
+  DiffTime <- x[pA >= min(L1) & pA <= max(L1), diff(range(Time))]
+  data.table(L0Mean, L1Mean, DiffTime)
+})
+S010_21307003_Summa <- do.call(rbind, S010_21307003_Summa)
+```
+
+```{r}
+S010_21307003_Summa[, hist(x = 1 - L1Mean/L0Mean, breaks = 20)]
+S010_21307003_Summa[, plot(x = 1 - L1Mean/L0Mean, y = DiffTime, xlim = c(0.1, 0.3), pch = 16)]
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- S010_21307003[[21]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) +
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) +
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) +
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+
+# 21307012
+
+```{r}
+(BUBs <- list.files(file.path(rootdir, AA), "Rds", full.names = TRUE))
+```
+
+```{r}
+BUB21307012 <- readRDS(BUBs[3])
+for(i in seq_along(BUB21307012)) BUB21307012[[i]]$aa <- i
+```
+
+```{r}
+BUBTab21307012 <- do.call(rbind, BUB21307012)
+```
+
+```{r}
+hist(BUBTab21307012$pA, breaks = diff(range(BUBTab21307012$pA))/0.1, main = "Histogram of current", xlab = "Current (pA)")
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- BUB21307012[[4]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) + 
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307012[, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L0 <- range(DenSmTab[start(gr):end(gr), x]))
+(L0Min <- mean(L0) * 0.9)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307012[pA < L0Min, pA], adjust = 1)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L1 <- range(DenSmTab[start(gr):end(gr), x]))
+(L1Min <- mean(L1) * 0.90)
+```
+
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(BUBTab21307012[pA < L1Min, pA], adjust = 3)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+DenSmTab <- data.table(x = DenSm$x, y = DenSm$y)
+
+for(i in seq_along(DenSmTab$y)) {
+  gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i])
+  
+  if(length(gr) == 1) {
+    next()
+  } else {
+    break()
+  }
+}
+gr <- IRanges(DenSmTab$y >= sort(DenSmTab$y, decreasing = TRUE)[i - 1])
+
+(L2 <- range(DenSmTab[start(gr):end(gr), x]))
+```
+
+```{r}
+S010 <- mapply(BUB21307012, FUN = function(x) {
+  current <- x[Sm < min(L0), pA]
+  if(min(current) > max(L2) & mean(current >= min(L1) & current <= max(L1)) > 0.8) {
+    "010"
+  } else {
+    NA
+  }
+})
+
+S010_21307012 <- BUB21307012[!is.na(S010)]
+length(S010_21307012)
+```
+
+```{r}
+S010_21307012_Summa <- lapply(S010_21307012, function(x) {
+  L0Mean <- x[L == "B", mean(pA)]
+  L1Mean <- x[pA >= min(L1) & pA <= max(L1), mean(pA)]
+  DiffTime <- x[pA >= min(L1) & pA <= max(L1), diff(range(Time))]
+  data.table(L0Mean, L1Mean, DiffTime)
+})
+S010_21307012_Summa <- do.call(rbind, S010_21307012_Summa)
+```
+
+```{r}
+S010_21307012_Summa[, hist(x = 1 - L1Mean/L0Mean, breaks = 20)]
+S010_21307012_Summa[, plot(x = 1 - L1Mean/L0Mean, y = DiffTime, xlim = c(0.1, 0.3), pch = 16)]
+```
+
+```{r fig.width=12, fig.height=6}
+Tab <- S010_21307012[[21]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) +
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) +
+  # geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) +
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+# All 010
+
+```{r}
+S010_21306010_Summa[, File := 21306010]
+S010_21307003_Summa[, File := 21307003]
+S010_21307012_Summa[, File := 21307012]
+S010_Summa <- rbind(S010_21306010_Summa, S010_21307003_Summa, S010_21307012_Summa)
+```
+
+```{r}
+mean(S010_Summa[, 1 - L1Mean/L0Mean])
+sd(S010_Summa[, 1 - L1Mean/L0Mean])
+```
+
+```{r}
+S010_Summa[, mean(1 - L1Mean/L0Mean), by = File]
+```
+
+```{r}
+ggplot(S010_Summa, aes(x = 1 - L1Mean/L0Mean, y = DiffTime * 1000, colour = factor(File))) + 
+  geom_point(size = 0.3) + 
+  xlim(c(0.1, 0.3)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(2, "line"), 
+        legend.position = "top") + 
+  guides(colour = guide_legend(override.aes = list(size = 2)))
+```
+
+```{r}
+ggplot(S010_Summa, aes(x = 1 - L1Mean/L0Mean, colour = factor(File))) + 
+  geom_line(stat = "density") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 16) + 
+  theme(legend.title = element_blank()) + 
+  theme(legend.title = element_blank(), 
+        legend.key.size = unit(2, "line"), 
+        legend.position = "top")
+```
+
+```{r}
+fwrite(S010_Summa, file.path(rootdir, paste0("trp", "S010_Summa.txt")), sep = "\t", row.names = F, quote = F)
+```

@@ -1,0 +1,555 @@
+---
+title: "Phe"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+```
+
+```{r}
+library(readABF)
+library(data.table)
+library(S4Vectors)
+library(IRanges)
+library(changepoint)
+library(ggplot2)
+
+KBins <- function(sig, minseglen1 = 100, minseglen2 = 10, pen.value = 1e-3) {
+  ansmean1 <- suppressWarnings(changepoint::cpt.meanvar(sig, penalty = "None", method = "PELT", minseglen = minseglen1))
+  Tab1 <- data.table(P = sig, B1 = rep(seq_len(nseg(ansmean1)), seg.len(ansmean1)))
+  Tab2 <- Tab1[, .(P = median(P)), by = "B1"]
+  
+  ansmean2 <- suppressWarnings(changepoint::cpt.meanvar(Tab2[, P], penalty = "Asymptotic", pen.value = pen.value, method = "PELT", minseglen = minseglen2))
+  Tab2[, B := rep(seq_len(nseg(ansmean2)), seg.len(ansmean2))]
+  res <- merge(Tab1, Tab2[, .(B1, B)], by = "B1")
+  res[, B1 := NULL]
+  res[, .(P = median(P), N = .N), "B"][, rep(P, N)]
+}
+
+KBins2 <- function(sig, minseglen1 = 100, minseglen2 = 10, pen.value = 1e-3) {
+  ansmean1 <- suppressWarnings(changepoint::cpt.mean(sig, penalty = "MBIC", method = "PELT", minseglen = minseglen1))
+  Tab1 <- data.table(P = sig, B1 = rep(seq_len(nseg(ansmean1)), seg.len(ansmean1)))
+  Tab2 <- Tab1[, .(P = median(P)), by = "B1"]
+  
+  ansmean2 <- suppressWarnings(changepoint::cpt.meanvar(Tab2[, P], penalty = "Asymptotic", pen.value = pen.value, method = "PELT", minseglen = minseglen2))
+  Tab2[, B := rep(seq_len(nseg(ansmean2)), seg.len(ansmean2))]
+  res <- merge(Tab1, Tab2[, .(B1, B)], by = "B1")
+  res[, B1 := NULL]
+  res[, .(P = median(P), N = .N), "B"][, rep(P, N)]
+}
+```
+
+# Step1. read ABF file
+
+```{r}
+phe <- readABF::readABF("/mnt/raid62/Personal_data/zhangdan/AA_zhangming/0303-phe#1/21303003.abf")
+
+phe <- as.data.table(as.data.frame(phe))
+colnames(phe) <- c("Time", "pA", "mV")
+```
+
+Only keep data with a voltage of 50 mV
+```{r}
+paste0("Only ", round(mean(phe[, round(mV) == 50]) * 100, 2), "% of the data is retained.")
+phe <- phe[round(mV) == 50, ]
+```
+
+Raw current density plot
+```{r fig.width=12, fig.height=6}
+plot(density(phe[pA < 130 & pA >= 0, pA], adjust = 3), xlab = "Current (pA)", main = "density of raw current")
+```
+
+# Step2. Noise reduction
+
+```{r}
+phe$Sm <- KBins(sig = phe$pA, pen.value = 1e-3, minseglen1 = 4, minseglen2 = 20)
+# phe$Sm <- KBins2(sig = phe$pA, pen.value = 1-1e-3, minseglen1 = 4, minseglen2 = 2)
+```
+
+```{r fig.width=12, fig.height=6}
+phe[Time > 0.91 & Time < 0.94, plot(Time, pA, type = "s")]
+phe[Time > 0.91 & Time < 0.94, lines(Time, Sm, type = "s", col = "red")]
+```
+
+## Density plot of smoothed signal
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(phe[Sm < 130 & Sm >= 0, Sm], adjust = 3)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+# Step3. Division of signal interval
+
+```{r}
+L0 <- c(112.3, 120)
+L1 <- c(88.5, 100.9)
+L2 <- c(40, 88.5)
+```
+
+```{r}
+phe[Sm > max(L0), L := "A"]
+phe[Sm <= max(L0) & Sm > min(L0), L := "B"] # baseline
+phe[Sm <= min(L0) & Sm > max(L1), L := "C"]
+phe[Sm <= max(L1) & Sm > min(L1), L := "D"] # first
+phe[Sm <= max(L2) & Sm > min(L2), L := "E"] # second
+phe[Sm <= min(L2), L := "F"]
+```
+
+# Step4. Secondary baseline filtering
+
+## Primary baseline signal
+
+```{r}
+LRle <- Rle(phe[, L])
+LRg <- IRanges(start(LRle), end(LRle))
+mcols(LRg)$L <- runValue(LRle)
+
+LRleVa <- paste0(runValue(LRle), collapse = "")
+
+L <- do.call(c, lapply(1:4, function(x) combn(LETTERS[3:6], x, simplify = F)))
+R <- lapply(L, rev)
+
+allcombn <- gtools::permutations(length(L), 2, repeats = T)
+allcombn <- lapply(seq_len(nrow(allcombn)), function(i) {
+  paste0("B", paste0(c(L[[allcombn[i, ][1]]], R[[allcombn[i, ][2]]]), collapse = ""), "B")
+})
+allcombn <- lapply(allcombn, function(x) paste0(runValue(Rle(unlist(strsplit(x, "")))), collapse = ""))
+allcombn <- unique(allcombn)
+
+BXB <- lapply(allcombn, function(x) gregexpr(x, LRleVa)[[1]])
+BXB <- BXB[!mapply(function(x) all(x == -1), BXB)]
+
+BXB <- lapply(BXB, function(x) {
+  start <- as.numeric(x)
+  steps <- unique(attr(x, "match.length"))
+  sort(do.call(c, lapply(0:(steps - 1), function(x) start + x)))
+})
+
+BXB_Rg <- LRg[sort(unlist(BXB))]
+
+fa <- findOverlaps(IRanges(start = seq_len(nrow(phe)), width = 1), BXB_Rg)
+
+phe_BXB <- phe[queryHits(fa), ]
+```
+
+```{r}
+LRle <- Rle(phe_BXB[, L])
+LRg <- IRanges(start(LRle), end(LRle))
+mcols(LRg)$L <- runValue(LRle)
+
+LRleVa <- paste0(runValue(LRle), collapse = "")
+
+L <- do.call(c, lapply(1:4, function(x) combn(LETTERS[3:6], x, simplify = F)))
+R <- lapply(L, rev)
+
+allcombn <- gtools::permutations(length(L), 2, repeats = T)
+allcombn <- lapply(seq_len(nrow(allcombn)), function(i) {
+  paste0("B", paste0(c(L[[allcombn[i, ][1]]], R[[allcombn[i, ][2]]]), collapse = ""), "B")
+})
+allcombn <- lapply(allcombn, function(x) paste0(runValue(Rle(unlist(strsplit(x, "")))), collapse = ""))
+
+allcombn <- allcombn[mapply(function(x) sum(unlist(strsplit(x, "")) == "B") == 2, allcombn)]
+allcombn <- unique(allcombn)
+
+BXB <- lapply(allcombn, function(x) gregexpr(x, LRleVa)[[1]])
+BXB <- BXB[!mapply(function(x) all(x == -1), BXB)]
+
+BXB <- do.call(c, lapply(BXB, function(x) {
+  start <- as.numeric(x)
+  steps <- unique(attr(x, "match.length"))
+  lapply(start, function(x) LRg[x:(x + steps - 1)])
+}))
+
+BXB <- lapply(BXB, function(x) {
+  L_Flank <- tail(width(IRanges(phe_BXB[start(x[1]):end(x[1]), Sm] == tail(phe_BXB[start(x[1]):end(x[1]), Sm], 1))), 1)
+  R_Flank <- head(width(IRanges(phe_BXB[start(x[length(x)]):end(x[length(x)]), Sm] == head(phe_BXB[start(x[length(x)]):end(x[length(x)]), Sm], 1))), 1)
+  start(x[1]) <- end(x[1]) - L_Flank + 1
+  end(x[length(x)]) <- start(x[length(x)]) + R_Flank - 1
+  phe_BXB[min(start(x)):max(end(x)), ]
+})
+```
+
+## Secondary baseline signal
+
+```{r}
+LRle <- Rle(phe[, L])
+LRg <- IRanges(start(LRle), end(LRle))
+mcols(LRg)$L <- runValue(LRle)
+
+LRleVa <- paste0(runValue(LRle), collapse = "")
+
+L <- do.call(c, lapply(1:5, function(x) combn(LETTERS[2:6], x, simplify = F)))
+R <- lapply(L, rev)
+
+allcombn <- gtools::permutations(length(L), 2, repeats = T)
+allcombn <- lapply(seq_len(nrow(allcombn)), function(i) {
+  paste0("A", paste0(c(L[[allcombn[i, ][1]]], R[[allcombn[i, ][2]]]), collapse = ""), "A")
+})
+allcombn <- lapply(allcombn, function(x) paste0(runValue(Rle(unlist(strsplit(x, "")))), collapse = ""))
+
+allcombn <- allcombn[!mapply(function(x) sum(unlist(strsplit(x, "")) == "B") == 2, allcombn)]
+allcombn <- unique(allcombn)
+
+AXA <- lapply(allcombn, function(x) gregexpr(x, LRleVa)[[1]])
+AXA <- AXA[!mapply(function(x) all(x == -1), AXA)]
+
+AXA <- lapply(AXA, function(x) {
+  start <- as.numeric(x)
+  steps <- unique(attr(x, "match.length"))
+  sort(do.call(c, lapply(0:(steps - 1), function(x) start + x)))
+})
+
+AXA_Rg <- LRg[sort(unlist(AXA))]
+
+fa <- findOverlaps(IRanges(start = seq_len(nrow(phe)), width = 1), AXA_Rg)
+
+phe_AXA <- phe[queryHits(fa), ]
+```
+
+```{r}
+LRle <- Rle(phe_AXA[, L])
+LRg <- IRanges(start(LRle), end(LRle))
+mcols(LRg)$L <- runValue(LRle)
+
+LRleVa <- paste0(runValue(LRle), collapse = "")
+
+L <- do.call(c, lapply(1:5, function(x) combn(LETTERS[2:6], x, simplify = F)))
+R <- lapply(L, rev)
+
+allcombn <- gtools::permutations(length(L), 2, repeats = T)
+allcombn <- lapply(seq_len(nrow(allcombn)), function(i) {
+  paste0("A", paste0(c(L[[allcombn[i, ][1]]], R[[allcombn[i, ][2]]]), collapse = ""), "A")
+})
+allcombn <- lapply(allcombn, function(x) paste0(runValue(Rle(unlist(strsplit(x, "")))), collapse = ""))
+
+allcombn <- allcombn[!mapply(function(x) sum(unlist(strsplit(x, "")) == "B") == 2, allcombn)]
+allcombn <- unique(allcombn)
+
+AXA <- lapply(allcombn, function(x) gregexpr(x, LRleVa)[[1]])
+AXA <- AXA[!mapply(function(x) all(x == -1), AXA)]
+
+AXA <- do.call(c, lapply(AXA, function(x) {
+  start <- as.numeric(x)
+  steps <- unique(attr(x, "match.length"))
+  lapply(start, function(x) LRg[x:(x + steps - 1)])
+}))
+
+AXA <- lapply(AXA, function(x) {
+  L_Flank <- tail(width(IRanges(phe_AXA[start(x[1]):end(x[1]), Sm] == tail(phe_AXA[start(x[1]):end(x[1]), Sm], 1))), 1)
+  R_Flank <- head(width(IRanges(phe_AXA[start(x[length(x)]):end(x[length(x)]), Sm] == head(phe_AXA[start(x[length(x)]):end(x[length(x)]), Sm], 1))), 1)
+  start(x[1]) <- end(x[1]) - L_Flank + 1
+  end(x[length(x)]) <- start(x[length(x)]) + R_Flank - 1
+  phe_AXA[min(start(x)):max(end(x)), ]
+})
+
+AXA <- AXA[mapply(function(x) any(x[, pA] < max(L1)), AXA)]
+```
+
+# Step5. Primary baseline current processing
+
+## Repolish
+
+```{r}
+# BXB2 <- mclapply(BXB, function(x) {
+#   y <- tryCatch(KBins2(sig = x[L != "B", pA], pen.value = 1 - 1e-2, minseglen1 = 4, minseglen2 = 2), error = function(e) NA)
+#   if(is.na(y)) {
+#     return(x)
+#   } else {
+#     x[L != "B", Sm := y]
+#     return(x)
+#   }
+# }, mc.cores = 10)
+BXB2 <- BXB
+```
+
+## Current density of primary baseline
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, BXB2)[Sm < 130 & Sm >= 0, Sm], adjust = 20)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.01 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+Remove the baseline
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, BXB2)[Sm < 130 & Sm >= 0 & L != "B", Sm], adjust = 0.7)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+L1 <- c(87, 98)
+```
+
+Remove the level1
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, BXB2)[Sm < min(L1), Sm], adjust = 0.3)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.3 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+L2 <- c(75.5, 81)
+```
+
+Remove the level2
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, BXB2)[Sm < min(L2), Sm], adjust = 0.5)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+```{r}
+L3 <- c(59.7, 66.8)
+L4 <- c(46.6, 55.1)
+```
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, BXB2)[Sm < max(L1), Sm], adjust = 0.6)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.02 * max(Py)
+
+plot(DenSm, type = "l", xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+```
+
+## Signal classification
+
+```{r}
+BXB2 <- BXB2[mapply(function(x) any(x[, Sm] < max(L1)), BXB2)]
+```
+
+```{r}
+BXB2 <- lapply(BXB2, function(x) {
+  x[, L := NULL]
+  x[Sm <= max(L0) & Sm > min(L0), L := "B"] # baseline
+  x[Sm <= max(L1) & Sm > min(L1), L := "1"] # first
+  x[Sm <= max(L2) & Sm > min(L2), L := "2"] # second
+  x[Sm <= max(L3) & Sm > min(L3), L := "3"] # third
+  x[Sm <= max(L4) & Sm > min(L4), L := "4"] # fourth
+  return(x)
+})
+```
+
+## Filtering
+
+```{r}
+BXB2 <- BXB2[!mapply(function(x) all(unique(x[!is.na(L), L]) == "B"), BXB2)]
+```
+
+```{r}
+Lsd <- mapply(function(x) x[!is.na(L) & L != "B", sd(pA), by = "L"][, mean(V1)], BXB2)
+BXB2 <- BXB2[Lsd < quantile(Lsd, .95)]
+```
+
+```{r}
+Lna <- mapply(function(x) x[, mean(is.na(L))], BXB2)
+BXB2 <- BXB2[Lna < .05]
+```
+
+```{r}
+Lna <- mapply(function(x) x[, sum(is.na(L))]/x[L != "B" | is.na(L), .N], BXB2)
+BXB2 <- BXB2[Lna < .05]
+```
+
+```{r}
+mapply(BXB2, FUN = function(x) {
+  paste0(runValue(Rle(x[!is.na(L), L])), collapse = "")
+}) -> sigclass
+names(BXB2) <- sigclass
+```
+
+```{r}
+sigclass <- as.data.table(as.data.frame(table(sigclass), stringsAsFactors = FALSE))
+sigclass[, sigclass := as.character(sigclass)]
+# sigclass[, sigclass := gsub("^B", "", sigclass)]
+# sigclass[, sigclass := gsub("B$", "", sigclass)]
+
+setkey(sigclass, Freq, sigclass)
+sigclass$sigclass <- factor(sigclass$sigclass, levels = rev(sigclass$sigclass))
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sigclass, aes(x = sigclass, y = Freq)) + 
+  geom_col() + 
+  geom_text(aes(x = sigclass, y = Freq + 30, label = Freq)) +
+  theme_classic(base_size = 15) + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+## Example of primary baseline
+
+```{r fig.width=12, fig.height=6}
+Tab <- BXB2[[which(names(BXB2) == "B14B")[1]]]
+Tab <- BXB2[[which(names(BXB2) == "B1B")[118]]]
+Tab <- BXB2[[61]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L2), ymax = max(L2)), alpha = 0.2) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L3), ymax = max(L3)), alpha = 0.2) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L4), ymax = max(L4)), alpha = 0.2) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+
+```{r}
+saveRDS(object = BXB2, file = "/mnt/raid61/Personal_data/tangchao/AANanopore/analysis/01.AASignalRecognition/ZhangMing20210402/phe/21303003_BXB.Rds")
+```
+
+# Step6. Secondary baseline signal
+
+```{r fig.width=12, fig.height=6}
+Tab <- AXA[[21]]
+
+ggplot() + 
+  geom_step(data = Tab, aes(Time, pA)) + 
+  geom_step(data = Tab, aes(Time, Sm, colour = "red")) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L0), ymax = max(L0)), alpha = 0.2) + 
+  geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = min(L1), ymax = max(L1)), alpha = 0.2) + 
+  theme_classic(base_size = 16) + 
+  theme(legend.position = "none")
+```
+
+## Current density of secondary baseline
+
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, AXA)[Sm < 130 & Sm >= 0, Sm], adjust = 3)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
+Remove the baseline
+```{r fig.width=12, fig.height=6}
+DenSm <- density(do.call(rbind, AXA)[Sm < 130 & Sm >= 0 & L != "A", Sm], adjust = 3)
+
+Bx <- DenSm$x[start(IRanges(diff(DenSm$y) > 0))]
+By <- DenSm$y[start(IRanges(diff(DenSm$y) > 0))]
+
+Px <- DenSm$x[start(IRanges(diff(DenSm$y) < 0))]
+Py <- DenSm$y[start(IRanges(diff(DenSm$y) < 0))]
+
+ic <- Py > 0.1 * max(Py)
+
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current")
+text(x = Px[ic], y = Py[ic] + max(Py) * 0.02, labels = round(Px[ic], 1))
+
+ib <- c(mapply(Px[ic], FUN = function(x) max(which(Bx < x))), mapply(Px[ic], FUN = function(x) min(which(Bx > x))))
+ib <- ib[!is.infinite(ib)]
+
+text(x = Bx[ib], y = By[ib] - max(Py) * 0.02, labels = round(Bx[ib], 1))
+```
+
