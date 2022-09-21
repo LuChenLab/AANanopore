@@ -1,0 +1,176 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(cowplot)
+library(parallel)
+library(caret)
+```
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/Version8/01.DataPreparation", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version8/02.Modeling/01.RF/01.Models", "Rds", full.names = T)
+```
+
+```{r}
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$aa, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$aa, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+```
+
+```{r}
+cutoffList <- mclapply(Preds, function(res) {
+  res[pred == true, Result := "Correct"]
+  res[pred != true, Result := "Wrong"]
+  cutoffList <- lapply(1:50/50, function(b) {
+    merge(res[, .(Recovery = mean(Prob >= b)), by = Dataset], 
+          res[Prob >= b, .(Accuracy = mean(Result == "Correct")), by = Dataset])
+  })
+  cutoffList <- data.table(Cutoff = rep(1:50/50, each = 4), do.call(rbind, cutoffList))
+  cutoffList[, L := paste0(Cutoff, "(", round(Recovery * 100, 1), ", ", round(Accuracy * 100, 1), ")")]
+  return(cutoffList)
+}, mc.cores = 6)
+
+cutoffList <- data.table(Model = rep(paste0("RF", 1:6), mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+```
+
+```{r fig.height=6, fig.width=8}
+library(ggrepel)
+ggplot(cutoffList[Dataset == "Test"], aes(x = Recovery * 100, y = Accuracy * 100, colour = Model)) + 
+  geom_line() + 
+  theme_bw(base_size = 16) + 
+  scale_x_reverse() +
+  labs(x = "Recovery (%)", y = "Accuracy (%)", title = "Test set") + 
+  geom_point(data = cutoffList[Dataset == "Test" & Cutoff %in% c(c(7)/10)]) +
+  geom_text_repel(data = cutoffList[Dataset == "Test" & Cutoff %in% c(c(7)/10)], aes(label = L)) + 
+  scale_color_brewer(palette = "Dark2")
+```
+
+```{r}
+openxlsx::write.xlsx(cutoffList, "analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/cutoffList.xlsx")
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Preds.Rds")
+```
+
+```{r}
+ggplot(cutoffList[Dataset %in% c("Test", "Validation")], aes(x = Recovery * 100, y = Accuracy * 100, colour = Model)) + 
+  geom_line() + 
+  theme_bw(base_size = 16) + 
+  scale_x_reverse() +
+  labs(x = "Recovery (%)", y = "Accuracy (%)") + 
+  theme(legend.position = "top") + 
+  geom_point(data = cutoffList[Dataset %in% c("Test", "Validation") & Cutoff %in% c(c(7)/10)]) +
+  geom_text_repel(data = cutoffList[Dataset %in% c("Test", "Validation") & Cutoff %in% c(c(7)/10)], aes(label = L)) + 
+  scale_color_brewer(palette = "Dark2") + 
+  facet_wrap(~ Dataset) + 
+  guides(colour = guide_legend(nrow = 1))
+ggsave("analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Cutoff_Recovery_Accuracy.pdf", width = 9, height = 6)
+```
+
+```{r}
+Preds <- do.call(rbind, Preds)
+Preds[pred == true, Result := "Correct"]
+Preds[pred != true, Result := "Wrong"]
+Preds[, Model := gsub("Fit", "RF", Model)]
+
+ggplot(Preds[Dataset %in% c("Test", "Validation")], aes(Prob, fill = Result)) +
+  geom_histogram() +
+  theme_bw(base_size = 16) +
+  facet_wrap(~ Dataset + Model, nrow = 2, scales = "free_y") +
+  theme(legend.position = "top") + 
+  labs(x = "Probability", y = "Count")
+
+ggsave("analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Prediction_Probability_Distribution.pdf", width = 16, height = 6)
+```
+
+```{r}
+ggplot(Preds[Dataset %in% c("Test", "Validation")], aes(Prob, fill = Result)) +
+  geom_histogram() +
+  theme_bw(base_size = 16) +
+  facet_grid(Dataset ~ Model, scales = "free_y") +
+  theme(legend.position = "top") + 
+  labs(x = "Probability", y = "Count")
+
+ggsave("analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Prediction_Probability_Distribution2.pdf", width = 16, height = 6)
+```
+
+
+```{r}
+Preds <- readRDS(file = "analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Preds.Rds")
+```
+
+```{r}
+cM <- Preds[[4]][Dataset == "ValidationUp" & Prob > 0, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+
+ggplot(data = reshape2::melt(as.matrix(cM)), aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") +
+  theme_bw(base_size = 15) + 
+  theme(legend.title = element_blank(), plot.margin = unit(c(0.25, 0, 0, 0), "lines")) + 
+  labs(x = "Prediction", y = "Reference") -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percent = rowSums(cM)), aes(x = A, y = Percent)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) -> p2
+```
+
+```{r fig.width=5.5, fig.height=5.5}
+p2 / p1 + plot_layout(heights = c(2, 8))
+ggsave("./analysis/03.MachineLearning/Version8/02.Modeling/01.RF/02.CompareModels/Cutoff4_ValidationUp_confusionMatrix.pdf", width = 7, height = 7)
+```
+

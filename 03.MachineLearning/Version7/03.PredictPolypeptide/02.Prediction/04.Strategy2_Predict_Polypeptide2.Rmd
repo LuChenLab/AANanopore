@@ -1,0 +1,224 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(parallel)
+library(caret)
+library(openxlsx)
+library(cowplot)
+```
+
+```{r}
+set.seed(19)
+AA_Cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(AA_Cols) <- Biostrings::AA_STANDARD
+```
+
+# Polypeptide2
+
+```{r}
+Signal1 <- as.data.table(read.xlsx("./analysis/02.PolypeptideSequencing/20211025/Version2/Polypeptide2_RPVKVYPNGAEDESAEAFPLEF.xlsx"))
+Signal1$ID <- paste0(Signal1[, Sample], "_", sprintf("%04d", do.call(c, lapply(Signal1[, .N, Sample][, N], function(x) seq_len(x)))))
+
+Mat <- readRDS("./analysis/03.MachineLearning/Version7/03.PredictPolypeptide/01.PolypeptideSignalTransformation/Polypeptide2_RPVKVYPNGAEDESAEAFPLEF.signal.Rds")
+Mat <- Mat[row.names(Mat) %in% Signal1$ID, ]
+```
+
+## RF
+
+```{r}
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/01.Models", "Rds", full.names = T)
+```
+
+```{r}
+Polypeptide2 <- mclapply(1:6, function(i) {
+  Fit <- readRDS(Models[i])
+  if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+  ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ppm[, Model := paste0("RF", i)]
+  ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+  return(ppm)
+}, mc.cores = 6)
+
+Polypeptide2 <- do.call(rbind, Polypeptide2)
+Polypeptide2[, pred := as.character(pred)]
+Polypeptide2[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+Polypeptide2 <- merge(Polypeptide2, Signal1[, .(ID, TimeRatio)], by = "ID")
+Polypeptide2_RF <- copy(Polypeptide2)
+```
+
+```{r fig.width=9, fig.height=4}
+ggplot(Polypeptide2_RF, aes(x = Prob, colour = Model)) + 
+  geom_line(stat = "Density") + 
+  theme_bw(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  facet_wrap( ~ Model, nrow = 2)
+```
+
+```{r fig.width=15, fig.height=8}
+ggplot(Polypeptide2_RF[Prob > 0.8], aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) +
+  facet_wrap( ~ Model) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+## KNN
+
+```{r}
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/05.knn/01.Models", "Rds", full.names = T)
+```
+
+```{r}
+Polypeptide2 <- mclapply(1:6, function(i) {
+  Fit <- readRDS(Models[i])
+  if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+  ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+  row.names(ROC_Test) <- row.names(subset.data.frame(Mat, AllTime > i & SignalSD < 4))
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ppm[, Model := paste0("KNN", i)]
+  ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+  return(ppm)
+}, mc.cores = 6)
+
+Polypeptide2 <- do.call(rbind, Polypeptide2)
+Polypeptide2[, pred := as.character(pred)]
+Polypeptide2[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+Polypeptide2 <- merge(Polypeptide2, Signal1[, .(ID, TimeRatio)], by = "ID")
+Polypeptide2_KNN <- copy(Polypeptide2)
+```
+
+```{r fig.width=9, fig.height=4}
+ggplot(Polypeptide2_KNN, aes(x = Prob, colour = Model)) + 
+  geom_line(stat = "Density") + 
+  theme_bw(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  facet_wrap( ~ Model, nrow = 2)
+```
+
+```{r fig.width=15, fig.height=8}
+ggplot(Polypeptide2_KNN[Prob > 0.9], aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) +
+  facet_wrap( ~ Model) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+## CART
+
+```{r}
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/06.CART/01.Models", "Rds", full.names = T)
+```
+
+```{r}
+Polypeptide2 <- mclapply(1:6, function(i) {
+  Fit <- readRDS(Models[i])
+  if(nrow(subset.data.frame(Mat, AllTime > i & SignalSD < 4)) == 0) return(NULL)
+  ROC_Test <- predict(Fit, subset.data.frame(Mat, AllTime > i & SignalSD < 4), type = "prob")
+  row.names(ROC_Test) <- row.names(subset.data.frame(Mat, AllTime > i & SignalSD < 4))
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ppm[, Model := paste0("CART", i)]
+  ppm <- merge(ppm, as.data.table(Mat, keep.rownames = "ID")[, .(ID, AllTime, DwellTime, SignalSD, Blockade)], by = "ID")
+  return(ppm)
+}, mc.cores = 6)
+
+Polypeptide2 <- do.call(rbind, Polypeptide2)
+Polypeptide2[, pred := as.character(pred)]
+Polypeptide2[, AA := plyr::mapvalues(pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+Polypeptide2 <- merge(Polypeptide2, Signal1[, .(ID, TimeRatio)], by = "ID")
+Polypeptide2_CART <- copy(Polypeptide2)
+```
+
+```{r fig.width=9, fig.height=4}
+ggplot(Polypeptide2_CART, aes(x = Prob, colour = Model)) + 
+  geom_line(stat = "Density") + 
+  theme_bw(base_size = 15) + 
+  scale_color_brewer(palette = "Dark2") + 
+  facet_wrap( ~ Model, nrow = 2)
+```
+
+```{r fig.width=15, fig.height=8}
+ggplot(Polypeptide2_CART[Prob > 0.7], aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) +
+  facet_wrap( ~ Model) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+## Shared
+
+```{r}
+Polypeptide2_iden <- lapply(1:6, function(i) {
+  RF_i <- Polypeptide2_RF[Model == paste0("RF", i), .(ID, Prob, AA)]
+  KNN_i <- Polypeptide2_KNN[Model == paste0("KNN", i), .(ID, Prob, AA)]
+  CART_i <- Polypeptide2_CART[Model == paste0("CART", i), .(ID, Prob, AA)]
+  
+  RF_i <- RF_i[Prob >= quantile(Prob, 0.4), .(ID, AA)]
+  KNN_i <- KNN_i[Prob >= quantile(Prob, 0.4), .(ID, AA)]
+  CART_i <- CART_i[Prob >= quantile(Prob, 0.4), .(ID, AA)]
+  setnames(RF_i, "AA", "RF")
+  setnames(KNN_i, "AA", "KNN")
+  setnames(CART_i, "AA", "CART")
+  
+  Pred_i <- Reduce(function(x, y) merge(x, y), list(RF_i, KNN_i, CART_i))
+  ids <- Pred_i[RF == KNN & KNN == CART, ID]
+  Polypeptide2_RF[Model == paste0("RF", i) & ID %in% ids, .(ID, Model, DwellTime, Blockade, AA)]
+})
+Polypeptide2_iden <- do.call(rbind, Polypeptide2_iden)
+Polypeptide2_iden[, Model := gsub("RF", "C", Model)]
+setnames(Polypeptide2_iden, "Model", "Cutoff")
+```
+
+```{r}
+write.csv(Polypeptide2_iden, "./analysis/03.MachineLearning/Version7/03.PredictPolypeptide/02.Prediction/Polypeptide2_Prediction_all_Cutoff.csv")
+```
+
+```{r fig.width=15, fig.height=4}
+ggplot(Polypeptide2_iden, aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) +
+  facet_wrap( ~ Cutoff) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+ggsave("./analysis/03.MachineLearning/Version7/03.PredictPolypeptide/02.Prediction/Polypeptide2_Prediction_all_Cutoff.pdf", width = 15, height = 4)
+```
+
+```{r}
+for(i in 1:3) {
+  ggplot(Polypeptide2_iden[Cutoff == paste0("C", i)], aes(x = Blockade, y = DwellTime, colour = AA)) + 
+    geom_text(aes(label = AA)) +
+    scale_color_manual(values = AA_Cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.position = "none") -> p
+  ggsave(filename = paste0("./analysis/03.MachineLearning/Version7/03.PredictPolypeptide/02.Prediction/Polypeptide2_Prediction_", i, "_Cutoff.pdf"), p, width = 5, height = 4)
+}
+```
+

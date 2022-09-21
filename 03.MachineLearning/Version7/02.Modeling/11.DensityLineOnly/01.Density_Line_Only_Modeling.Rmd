@@ -1,0 +1,154 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(parallel)
+library(caret)
+library(openxlsx)
+library(cowplot)
+```
+
+```{r}
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10)
+
+library(doParallel)
+cl <- makePSOCKcluster(20)
+registerDoParallel(cl)
+```
+
+# RF
+
+```{r}
+lapply(1:6, function(i) {
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  RFC <- train(Class ~ ., data = Train, 
+                # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+                method = "rf", 
+                trControl = fitControl,
+                verbose = FALSE,
+                ## to evaluate:
+                tuneGrid = expand.grid(mtry = 30),
+                # tuneLength = 50,
+                metric = "Accuracy", 
+                allowParallel = TRUE)
+  saveRDS(RFC, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/01.Models/RF_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+# KNN
+
+```{r}
+lapply(1:6, function(i) {
+  print(i)
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  knn <- train(Class ~ ., 
+                       data = Train, 
+                       method = "knn", 
+                       tuneLength = 6,
+                       trControl = fitControl)
+  saveRDS(knn, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/05.knn/01.Models/knn_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+# CART
+
+```{r}
+lapply(1:6, function(i) {
+  print(i)
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  CART <- train(Class ~ ., 
+               data = Train, 
+               method = "treebag", 
+               tuneLength = 6,
+               trControl = fitControl)
+  saveRDS(CART, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/06.CART/01.Models/CART_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+# NNet
+
+```{r}
+lapply(1:6, function(i) {
+  print(i)
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  pcaNNet <- train(Class ~ ., 
+                   data = Train, 
+                   method = "pcaNNet", 
+                   # tuneGrid = expand.grid(data.frame(size = 12, decay = 0.1)),
+                   tuneLength = 6,
+                   trControl = fitControl)
+  saveRDS(pcaNNet, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/04.pcaNNet/01.Models/pcaNNet_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+# AdaBoost
+
+```{r}
+lapply(1:6, function(i) {
+  print(i)
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  AdaBoost <- train(Class ~ ., 
+               data = Train, 
+               method = "AdaBoost.M1", 
+               trControl = fitControl)
+  saveRDS(AdaBoost, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/07.AdaBoost/01.Models/AdaBoost_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+# NB
+
+```{r}
+lapply(1:6, function(i) {
+  print(i)
+  load(file = paste0("./analysis/03.MachineLearning/01.data/Version7/Train_Data_", i, ".RData"))
+  Train <- subset.data.frame(Train, select = !colnames(Train) %in% c("AllTime", "DwellTime", "SignalSD", "Blockade"))
+  set.seed(825)
+  naive_bayes <- train(Class ~ ., 
+                       data = Train, 
+                       method = "naive_bayes", 
+                       # tuneGrid = expand.grid(data.frame(size = 12, decay = 0.1)),
+                       # tuneLength = 6,
+                       trControl = fitControl)
+  saveRDS(naive_bayes, file = paste0("./analysis/03.MachineLearning/Version7/02.Modeling/02.NB/01.Models/NB_Density_Line_Ony_Fit", i, ".Rds"))
+})
+```
+
+```{r}
+stopCluster(cl)
+```

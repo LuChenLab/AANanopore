@@ -1,0 +1,308 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(parallel)
+library(caret)
+library(doParallel)
+library(pbapply)
+library(patchwork)
+library(multiROC)
+library(pROC)
+library(cowplot)
+library(dummies)
+```
+
+# Cutoff 1
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+load(Modeling_Datas[1])
+```
+
+```{r warning=FALSE, message=FALSE}
+true_label1 <- dummies::dummy(Test$amino_acid, sep = " ")
+true_label1 <- data.frame(true_label1)
+colnames(true_label1) <- gsub("amino_acid.", "", colnames(true_label1))
+colnames(true_label1) <- paste0(colnames(true_label1), "_true")
+```
+
+## Test
+
+### RF
+
+```{r}
+RF_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/01.Models/RF_Fit1.Rds")
+pred_RF0 <- predict(RF_Fit1, Test)
+pred_RF1 <- predict(RF_Fit1, Test, type = "prob")
+pred_RF0 <- data.table(pred = pred_RF0, Prob = apply(pred_RF1, 1, max))
+pred_RF0$true <- Test$amino_acid
+colnames(pred_RF1) <- paste0(colnames(pred_RF1), "_pred_RF")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_RF1 <- cbind(true_label1, pred_RF1)
+roc_RF1 <- multi_roc(final_RF1)
+pr_RF1 <- multi_pr(final_RF1)
+
+plot_roc_RF1 <- as.data.table(plot_roc_data(roc_RF1))
+plot_pr_RF1 <- as.data.table(plot_pr_data(pr_RF1))
+```
+
+
+### NB
+
+```{r}
+NB_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/02.NB/01.Models/NB_Fit1.Rds")
+pred_NB0 <- predict(NB_Fit1, Test)
+pred_NB1 <- predict(NB_Fit1, Test, type = "prob")
+pred_NB0 <- data.table(pred = pred_NB0, Prob = apply(pred_NB1, 1, max))
+pred_NB0$true <- Test$amino_acid
+colnames(pred_NB1) <- paste0(colnames(pred_NB1), "_pred_NB")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_NB1 <- cbind(true_label1, pred_NB1)
+roc_NB1 <- multi_roc(final_NB1)
+pr_NB1 <- multi_pr(final_NB1)
+
+plot_roc_NB1 <- as.data.table(plot_roc_data(roc_NB1))
+plot_pr_NB1 <- as.data.table(plot_pr_data(pr_NB1))
+```
+
+
+### NNet
+
+```{r}
+NNet_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/04.pcaNNet/01.Models/pcaNNet_Fit1.Rds")
+pred_NNet0 <- predict(NNet_Fit1, Test)
+pred_NNet1 <- predict(NNet_Fit1, Test, type = "prob")
+pred_NNet0 <- data.table(pred = pred_NNet0, Prob = apply(pred_NNet1, 1, max))
+pred_NNet0$true <- Test$amino_acid
+colnames(pred_NNet1) <- paste0(colnames(pred_NNet1), "_pred_NNet")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_NNet1 <- cbind(true_label1, pred_NNet1)
+roc_NNet1 <- multi_roc(final_NNet1)
+pr_NNet1 <- multi_pr(final_NNet1)
+
+plot_roc_NNet1 <- as.data.table(plot_roc_data(roc_NNet1))
+plot_pr_NNet1 <- as.data.table(plot_pr_data(pr_NNet1))
+```
+
+
+### KNN
+
+```{r}
+KNN_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/05.knn/01.Models/knn_Fit1.Rds")
+pred_KNN0 <- predict(KNN_Fit1, Test)
+pred_KNN1 <- predict(KNN_Fit1, Test, type = "prob")
+pred_KNN0 <- data.table(pred = pred_KNN0, Prob = apply(pred_KNN1, 1, max))
+pred_KNN0$true <- Test$amino_acid
+colnames(pred_KNN1) <- paste0(colnames(pred_KNN1), "_pred_KNN")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_KNN1 <- cbind(true_label1, pred_KNN1)
+roc_KNN1 <- multi_roc(final_KNN1)
+pr_KNN1 <- multi_pr(final_KNN1)
+
+plot_roc_KNN1 <- as.data.table(plot_roc_data(roc_KNN1))
+plot_pr_KNN1 <- as.data.table(plot_pr_data(pr_KNN1))
+```
+
+
+### CART
+
+```{r}
+CART_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/06.CART/01.Models/CART_Fit1.Rds")
+pred_CART0 <- predict(CART_Fit1, Test)
+pred_CART1 <- predict(CART_Fit1, Test, type = "prob")
+pred_CART0 <- data.table(pred = pred_CART0, Prob = apply(pred_CART1, 1, max))
+pred_CART0$true <- Test$amino_acid
+colnames(pred_CART1) <- paste0(colnames(pred_CART1), "_pred_CART")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_CART1 <- cbind(true_label1, pred_CART1)
+roc_CART1 <- multi_roc(final_CART1)
+pr_CART1 <- multi_pr(final_CART1)
+
+plot_roc_CART1 <- as.data.table(plot_roc_data(roc_CART1))
+plot_pr_CART1 <- as.data.table(plot_pr_data(pr_CART1))
+```
+
+
+### AdaBoost
+
+```{r}
+AdaBoost_Fit1 <- readRDS("./analysis/03.MachineLearning/Version7/02.Modeling/07.AdaBoost/01.Models/AdaBoost_Fit1.Rds")
+pred_AdaBoost0 <- predict(AdaBoost_Fit1, Test)
+pred_AdaBoost1 <- predict(AdaBoost_Fit1, Test, type = "prob")
+pred_AdaBoost0 <- data.table(pred = pred_AdaBoost0, Prob = apply(pred_AdaBoost1, 1, max))
+pred_AdaBoost0$true <- Test$amino_acid
+colnames(pred_AdaBoost1) <- paste0(colnames(pred_AdaBoost1), "_pred_AdaBoost")
+```
+
+```{r warning=FALSE, message=FALSE}
+final_AdaBoost1 <- cbind(true_label1, pred_AdaBoost1)
+roc_AdaBoost1 <- multi_roc(final_AdaBoost1)
+pr_AdaBoost1 <- multi_pr(final_AdaBoost1)
+
+plot_roc_AdaBoost1 <- as.data.table(plot_roc_data(roc_AdaBoost1))
+plot_pr_AdaBoost1 <- as.data.table(plot_pr_data(pr_AdaBoost1))
+```
+
+```{r}
+plot_roc_List <- list(RF = plot_roc_RF1, 
+                      NB = plot_roc_NB1, 
+                      NNet = plot_roc_NNet1, 
+                      KNN = plot_roc_KNN1, 
+                      CART = plot_roc_CART1, 
+                      AdaBoost = plot_roc_AdaBoost1)
+
+plot_pr_List <- list(RF = plot_pr_RF1, 
+                     NB = plot_pr_NB1, 
+                     NNet = plot_pr_NNet1, 
+                     KNN = plot_pr_KNN1, 
+                     CART = plot_pr_CART1, 
+                     AdaBoost = plot_pr_AdaBoost1)
+```
+
+```{r}
+saveRDS(plot_roc_List, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Cutoff1_Testset_plot_roc_List.Rds")
+saveRDS(plot_pr_List, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Cutoff1_Testset_plot_pr_List.Rds")
+```
+
+```{r}
+pred0_List <- list(RF = pred_RF0, 
+                   NB = pred_NB0, 
+                   NNet = pred_NNet0, 
+                   KNN = pred_KNN0, 
+                   CART = pred_CART0, 
+                   AdaBoost = pred_AdaBoost0)
+
+pred1_List <- list(RF = pred_RF1, 
+                   NB = pred_NB1, 
+                   NNet = pred_NNet1, 
+                   KNN = pred_KNN1, 
+                   CART = pred_CART1, 
+                   AdaBoost = pred_AdaBoost1)
+
+saveRDS(pred0_List, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Cutoff1_Testset_pred0_List.Rds")
+saveRDS(pred1_List, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Cutoff1_Testset_pred1_List.Rds")
+```
+
+```{r}
+confMat <- lapply(pred0_List, function(x) {
+  cM <- x[, confusionMatrix(pred, true)]
+  data.table(Accuracy = cM$overall[1], 
+             Sensitivity = apply(cM$byClass, 2, mean)[1], 
+             Specificity = apply(cM$byClass, 2, mean)[2], 
+             Precision = apply(cM$byClass, 2, mean)[5], 
+             Recall = apply(cM$byClass, 2, mean)[6], 
+             F1 = apply(cM$byClass, 2, mean, na.rm = T)[7])
+})
+confMat <- data.table(Model = names(pred0_List), do.call(rbind, confMat))
+
+write.csv(confMat, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Cutoff1_Testset_confusionMatrix.csv")
+```
+
+### plot
+
+```{r}
+MoldeCols <- ggsci::pal_igv()(6)
+names(MoldeCols) <- c("RF", "NB", "NNet", "KNN", "CART", "AdaBoost")
+```
+
+```{r}
+ROC_AUCs <- lapply(plot_roc_List, function(x) {
+  data.table(Macro = x[Group == "Macro", unique(AUC)], Micro = x[Group == "Micro", unique(AUC)])
+})
+ROC_AUCs <- data.table(Model = names(plot_roc_List), Curve = "ROC",  do.call(rbind, ROC_AUCs))
+
+PR_AUCs <- lapply(plot_pr_List, function(x) {
+  data.table(Macro = x[Group == "Macro", unique(AUC)], Micro = x[Group == "Micro", unique(AUC)])
+})
+PR_AUCs <- data.table(Model = names(plot_roc_List), Curve = "PR",  do.call(rbind, PR_AUCs))
+AUCs <- rbind(ROC_AUCs, PR_AUCs)
+```
+
+#### ROC
+
+```{r}
+roc_mat <- lapply(plot_roc_List, function(x) {
+  set.seed(123)
+  x[Group == "Macro"][sort(sample(.N, 1000))]
+})
+roc_mat <- data.table(Model = rep(names(plot_roc_List), each = 1000), do.call(rbind, roc_mat))
+```
+
+```{r}
+od <- AUCs[Curve == "ROC"][order(Macro, decreasing = T), as.character(Model)]
+roc_mat[, Model := factor(Model, levels = od)]
+AUCs[, Model := factor(Model, levels = od)]
+setkey(AUCs, Curve, Model)
+```
+
+```{r fig.width=6, fig.height=4}
+ggplot(roc_mat, aes(x = 1 - Specificity, y = Sensitivity, colour = Model)) + 
+  geom_path(size = 1) + 
+  geom_text(data = AUCs[Curve == "ROC", ], mapping = aes(x = 0.75, y = 6:1/10, label = paste0("AUC = ", round(Macro, 4)))) +
+  theme_bw(base_size = 15) + 
+  scale_color_manual(values = MoldeCols[od]) + 
+  lims(x = c(0, 1), y = c(0, 1))
+ggsave("./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Test_ROCs.pdf", width = 5.5, height = 4)
+```
+
+
+#### PR
+
+```{r}
+pr_mat <- lapply(plot_pr_List, function(x) {
+  set.seed(123)
+  x[Group == "Macro"][sort(sample(.N, 1000))]
+})
+pr_mat <- data.table(Model = rep(names(plot_pr_List), each = 1000), do.call(rbind, pr_mat))
+```
+
+```{r}
+od <- AUCs[Curve == "PR"][order(Macro, decreasing = T), as.character(Model)]
+pr_mat[, Model := factor(Model, levels = od)]
+AUCs[, Model := factor(Model, levels = od)]
+setkey(AUCs, Curve, Model)
+```
+
+```{r fig.width=6, fig.height=4}
+ggplot(pr_mat, aes(x = Recall, y = Precision, colour = Model)) + 
+  geom_path(size = 1) + 
+  geom_text(data = AUCs[Curve == "PR", ], mapping = aes(x = 0.25, y = 6:1/10, label = paste0("AUC = ", round(Macro, 4)))) +
+  theme_bw(base_size = 15) + 
+  scale_color_manual(values = MoldeCols[od]) + 
+  lims(x = c(0, 1), y = c(0, 1))
+ggsave("./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/01.MultiROC/Test_PRCs.pdf", width = 5.5, height = 4)
+```
+

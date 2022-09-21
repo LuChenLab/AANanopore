@@ -1,0 +1,80 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(openxlsx)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+```
+
+```{r}
+F1 <- function(pred) {
+  res <- lapply(pred, function(x) {
+    mapply(c("Test", "TestUp", "Validation", "ValidationUp"), FUN = function(i) {
+      xi <- x[Dataset == i]
+      xi[true == pred, Result := "Correct"]
+      xi[true != pred, Result := "Wrong"]
+      xi[, Result := factor(Result, c("Wrong", "Correct"))]
+      setkey(xi, Prob, Result)
+      f <- round(nrow(xi) * 0.4)
+      t <- nrow(xi)
+      xi[f:t, mean(true == pred) * 100]
+    })
+  })
+  data.table(Model = mapply(function(x) x[, unique(Model)], pred), do.call(rbind, res))
+}
+```
+
+
+```{r}
+RF <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Preds.Rds")
+NB <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/02.NB/02.CompareModels/Preds.Rds")
+NNet <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/04.pcaNNet/02.CompareModels/Preds.Rds")
+KNN <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/05.knn/02.CompareModels/Preds.Rds")
+CART <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/06.CART/02.CompareModels/Preds.Rds")
+AdaBoost <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/07.AdaBoost/02.CompareModels/Preds.Rds")
+```
+
+```{r}
+Recovery60 <- rbind(F1(RF),
+                    F1(NB),
+                    F1(NNet),
+                    F1(KNN),
+                    F1(CART),
+                    F1(AdaBoost))
+Recovery60[, Cutoff := Model]
+Recovery60[, Cutoff := gsub("Fit", "C", Cutoff)]
+Recovery60[, Model := rep(c("RF", "NB", "NNet", "KNN", "CART", "AdaBoost"), each = 6)]
+```
+
+```{r}
+Recovery60[Cutoff == "C4"]
+```
+
+```{r}
+write.xlsx(Recovery60, "./analysis/03.MachineLearning/Version7/02.Modeling/10.Compare/02.Accuracy/Recovery_60_Percent_Accuracy.xlsx")
+```
+
+

@@ -1,0 +1,123 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(cowplot)
+library(parallel)
+library(caret)
+```
+
+# Data Preparation
+
+```{r}
+load(file = "./analysis/03.MachineLearning/01.data/Version6/AAInfo_RawSig.RData")
+AAInfo[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+AAInfo$AllTime <- mcmapply(AAInfo$ID, FUN = function(x) {
+  RawSig[ID == x, diff(range(Time))] * 1000
+}, mc.cores = 10)
+
+AAInfo$Blockade2 <- mcmapply(AAInfo$ID, FUN = function(x) {
+  den <- RawSig[ID == x, density(pA)]
+  1 - with(den, x[which.max(y)])
+}, mc.cores = 10)
+```
+
+```{r}
+BinExp <- mclapply(AAInfo$ID, FUN = function(id) {
+  round(density(RawSig[ID == id, pA], from = 0, to = 1, n = 200, adjust = 1)$y, 3)
+}, mc.cores = 10)
+BinExp <- do.call(rbind, BinExp)
+row.names(BinExp) <- AAInfo$ID
+colnames(BinExp) <- paste0("D", sprintf("%03d", seq_len(ncol(BinExp))))
+```
+
+```{r}
+SampPoint <- mclapply(AAInfo$ID, FUN = function(id) {
+  RawSig[ID == id, pA][sort(RawSig[ID == id, sample(.N, 200, replace = TRUE)])]
+}, mc.cores = 10)
+SampPoint <- do.call(rbind, SampPoint)
+row.names(SampPoint) <- AAInfo$ID
+colnames(SampPoint) <- paste0("P", sprintf("%03d", seq_len(ncol(SampPoint))))
+```
+
+```{r}
+Mat <- cbind(BinExp, SampPoint, AAInfo[, .(ID, AllTime, DwellTime, SignalSD, Blockade2, aa)])
+Mat[, aa := as.factor(aa)]
+Mat <- na.omit(Mat)
+```
+
+```{r}
+saveRDS(Mat, file = "./analysis/03.MachineLearning/Version8/01.DataPreparation/All_Transformed_data.Rds")
+```
+
+
+# Model Training
+
+```{r}
+Mat <- readRDS("./analysis/03.MachineLearning/Version8/01.DataPreparation/All_Transformed_data.Rds")
+```
+
+```{r}
+Mat <- Mat[!aa %in% c("C", "P")]
+Mat[, aa := as.character(aa)]
+Mat[, aa := as.factor(aa)]
+```
+
+```{r}
+lapply(1:6, function(i) {
+  Mat <- Mat[AllTime > i & SignalSD < 4]
+  Mat[, DwellTime := NULL]
+  Mat[, SignalSD := NULL]
+  AAInfoi <- AAInfo[ID %in% Mat[, ID]]
+  
+  Vali_Set <- AAInfoi[, .N, by = c("amino_acid", "file_name")][N > 20, .SD[which.min(N)], amino_acid]
+  Vali_Set <- merge(Vali_Set[, .(amino_acid, file_name)], AAInfoi, by = c("amino_acid", "file_name"))
+  
+  Valid <- Mat[ID %in% Vali_Set$ID]
+  Mat <- Mat[!ID %in% Vali_Set$ID]
+  Valid[, ID := NULL]
+  
+  set.seed(3456)
+  Train <- Mat[, .SD[sample(.N, round(Mat[, .N, aa][, min(N)]*0.8)), ], aa]
+  Test <- Mat[!ID %in% Train$ID]
+  
+  Train[, ID := NULL]
+  Train <- data.frame(Train[, -c(1)], Class = Train[[1]])
+  
+  set.seed(9560)
+  up_Test <- upSample(x = Test[, !colnames(Test) %in% c("ID", "aa"), with = F],
+                      y = Test$aa)                         
+  
+  set.seed(9560)
+  up_Valid <- upSample(x = Valid[, !colnames(Valid) %in% c("ID", "aa"), with = F],
+                       y = Valid$aa)
+  
+  save(Train, Test, up_Test, Valid, up_Valid, file = paste0("./analysis/03.MachineLearning/Version8/01.DataPreparation/Modeling_Data_", i, ".RData"))
+  save(Train, file = paste0("./analysis/03.MachineLearning/Version8/01.DataPreparation/Train_Data_", i, ".RData"))
+})
+```
+

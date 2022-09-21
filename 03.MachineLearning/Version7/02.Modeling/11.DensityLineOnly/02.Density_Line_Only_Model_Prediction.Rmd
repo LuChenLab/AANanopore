@@ -1,0 +1,253 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(parallel)
+library(caret)
+library(doParallel)
+library(pbapply)
+library(patchwork)
+library(multiROC)
+library(pROC)
+library(cowplot)
+library(dummies)
+library(Biostrings)
+```
+
+# RF
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/01.Models", "RF_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
+
+# KNN
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/05.knn/01.Models", "knn_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/05.knn/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
+
+# CART
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/06.CART/01.Models", "CART_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/06.CART/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
+
+# NB
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/02.NB/01.Models", "NB_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/02.NB/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
+
+# NNet
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/04.pcaNNet/01.Models", "NNet_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/04.pcaNNet/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
+
+# NNet
+
+```{r}
+Modeling_Datas <- list.files("./analysis/03.MachineLearning/01.data/Version7", "Modeling_Data", full.names = T)
+Models <- list.files("./analysis/03.MachineLearning/Version7/02.Modeling/07.AdaBoost/01.Models", "AdaBoost_Density_Line_Ony", full.names = T)
+
+Preds <- mclapply(1:6, function(i) {
+  load(Modeling_Datas[i])
+  Fit <- readRDS(Models[i])
+  
+  ROC_Test <- predict(Fit, Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, ppm[, 2:3])
+  
+  ROC_Test_up <- predict(Fit, up_Test, type = "prob")
+  ppm <- melt(as.data.table(ROC_Test_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Test_up <- cbind(as.data.table(ROC_Test_up), true = up_Test$Class, ppm[, 2:3])
+  
+  ROC_Valid <- predict(Fit, Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, ppm[, 2:3])
+  
+  ROC_Valid_up <- predict(Fit, up_Valid, type = "prob")
+  ppm <- melt(as.data.table(ROC_Valid_up, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+  ROC_Valid_up <- cbind(as.data.table(ROC_Valid_up), true = up_Valid$Class, ppm[, 2:3])
+  
+  res <- rbind(data.table(Dataset = "Test", ROC_Test), 
+               data.table(Dataset = "TestUp", ROC_Test_up),
+               data.table(Dataset = "Validation", ROC_Valid),
+               data.table(Dataset = "ValidationUp", ROC_Valid_up))
+  data.table(Model = paste0("Fit", i), res)
+}, mc.cores = 6)
+
+saveRDS(Preds, file = "analysis/03.MachineLearning/Version7/02.Modeling/07.AdaBoost/02.CompareModels/Preds_Density_Line_Only_Model.Rds")
+```
