@@ -1,0 +1,162 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(parallel)
+library(caret)
+library(openxlsx)
+library(cowplot)
+library(ggseqlogo)
+```
+
+ß-amyloid-wild type, LVFFAE
+ß-amyloid-v1, LVFFAK
+ß-amyloid-v2, LVFFGK
+ß-amyloid-v3, LVFFAG
+ß-amyloid-v4, LVPFAE
+
+```{r}
+Aβ <- "LVFFAE"
+Aβ_v1 <- "LVFFAK"
+Aβ_v2 <- "LVFFGK"
+Aβ_v3 <- "LVFFAG"
+Aβ_v4 <- "LVPFAE"
+Hb <- "LTPEEKS"
+HbS <- "LTPVEKS"
+```
+
+```{r}
+load(file = "./analysis/03.MachineLearning/01.data/Version6/AAInfo_RawSig.RData")
+AAInfo[, AA := plyr::mapvalues(x = amino_acid, Biostrings::AMINO_ACID_CODE, names(Biostrings::AMINO_ACID_CODE))]
+```
+
+```{r}
+Ls <- lapply(c(Aβ, Aβ_v1, Aβ_v2, Aβ_v3, Aβ_v4), function(p) {
+  id <- do.call(rbind, lapply(unlist(strsplit(p, "")), function(a) AAInfo[AA == a, .SD[sample(.N, 200)]]))
+  d <- density(RawSig[ID %in% id$ID & L != "B", pA], from = 0.4, to = 1, adjust = 0.5)
+  data.table(Peptide = p, x = d$x, d = d$y)
+})
+Ls <- do.call(rbind, Ls)
+```
+
+```{r fig.width=7, fig.height=3}
+ggplot(Ls, aes(x = x, y = d, colour = Peptide)) + 
+  geom_line() + 
+  theme_bw(base_size = 15)
+```
+
+```{r}
+##  different color series
+col1 <- colorRampPalette(c("#7F0000", "red", "#FF7F00", "yellow", "white",
+                           "cyan", "#007FFF", "blue","#00007F"))
+col2 <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", "#F4A582",
+                           "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE",
+                           "#4393C3", "#2166AC", "#053061"))
+col3 <- colorRampPalette(c("red", "white", "blue"))
+col4 <- colorRampPalette(c("#7F0000", "red", "#FF7F00", "yellow", "#7FFF7F",
+                           "cyan", "#007FFF", "blue", "#00007F"))
+wb <- c("white", "black")
+
+library(corrplot)
+M <- cor(dcast(Ls, x ~ Peptide, value.var = "d")[, -1], method = "spearman")
+
+corrplot(M, method = "color", col = col1(20), cl.length = 21, order = "AOE",
+         addCoef.col = "grey", type = "upper", tl.pos = "d")
+
+```
+
+
+
+```{r}
+Lss <- lapply(c(Aβ, Aβ_v1, Aβ_v2, Aβ_v3, Aβ_v4), function(p) {
+  do.call(rbind, lapply(0:9, function(i) {
+    id <- do.call(rbind, lapply(unlist(strsplit(p, "")), function(a) AAInfo[AA == a, .SD[sample(.N, 200)]]))
+    d <- density(RawSig[ID %in% id$ID & L != "B", pA], from = 0.4, to = 1, adjust = 0.5)
+    data.table(Peptide = paste0(p, "_", i), x = d$x, d = d$y)
+  }))
+})
+Lss <- do.call(rbind, Lss)
+```
+
+```{r fig.width=7, fig.height=3}
+ggplot(Ls, aes(x = x, y = d, colour = Peptide)) + 
+  geom_line() + 
+  theme_bw(base_size = 15)
+```
+
+```{r fig.width=20, fig.height=20}
+Ms <- cor(dcast(Lss, x ~ Peptide, value.var = "d")[, -1], method = "spearman")
+corrplot(Ms, method = "color", col = col1(20), cl.length = 21, order = "AOE",
+         addCoef.col = "grey", type = "upper", tl.pos = "d")
+corrplot(Ms, order = "hclust", hclust.method = "ward.D2", addrect = 5)
+```
+
+```{r}
+library(FactoMineR)
+pca <- PCA(t(dcast(Lss, x ~ Peptide, value.var = "d")[, -1]), ncp = 10, graph = F)
+pca_result <- data.frame(pca$svd$U, Name = colnames(dcast(Lss, x ~ Peptide, value.var = "d")[, -1]))
+pca_result <- as.data.table(pca_result)
+pca_result$Peptide <- mapply(function(x) x[1], strsplit(pca_result$Name, "_"))
+```
+
+```{r fig.width=5, fig.height=3.5}
+ggplot(pca_result, aes(x = X1, y = X2, color = Peptide))+
+  geom_point(size = 2) + #Size and alpha just for fun
+  theme_bw(base_size = 15) +
+  xlab(paste("PC1(", round(pca$eig[,2][1], 2), "%)", sep = "")) +
+  ylab(paste("PC2(", round(pca$eig[,2][2], 2), "%)", sep = ""))
+```
+
+```{r fig.width=5, fig.height=8}
+library(factoextra)
+fviz_dend(hcut(t(dcast(Lss, x ~ Peptide, value.var = "d")[, -1]), 
+               k = 5, stand = TRUE), 
+          rect = F, cex = .6, horiz = T)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
