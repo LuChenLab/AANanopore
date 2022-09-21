@@ -1,0 +1,139 @@
+---
+title: "Polypeptide sequencing"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+  code_folding: "hide"
+toc: true
+toc_depth: 4
+toc_float: 
+  collapsed: false
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+source("./script/01.AASignalRecognition/Version6/SignalProcessing/AdditionalFunctions.R")
+library(openxlsx)
+library(ggplot2)
+library(data.table)
+library(ggbeeswarm)
+library(ggridges)
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/实验信息表1101.xlsx"))
+pps <- unique(meta[amino_acid != "blank", amino_acid])
+```
+
+```{r}
+ppi <- pps[1]
+files <- paste0("./analysis/02.PolypeptideSequencing/20211025/Version1/AAs_Signal_", 
+                meta[amino_acid == ppi & amino_acid != "blank", file_name], ".xlsx")
+file.exists(files)
+Signals <- lapply(files, read.xlsx)
+names(Signals) <- gsub(".xlsx", "", gsub("AAs_Signal_", "", basename(basename(files))))
+Signal <- data.table(Sample = rep(names(Signals), mapply(nrow, Signals)), do.call(rbind, Signals))
+
+write.xlsx(c(list(Merge = Signal), Signals), "./analysis/02.PolypeptideSequencing/20211025/Version1/Polypeptide1_1119.xlsx")
+```
+
+```{r}
+ggplot(Signal[DwellTime > 2], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  xlim(c(0.1, 0.3))
+```
+
+
+
+
+
+```{r}
+ppi <- pps[2]
+files <- paste0("./analysis/02.PolypeptideSequencing/20211025/Version1/AAs_Signal_", 
+                meta[amino_acid == ppi & amino_acid != "blank", file_name], ".xlsx")
+file.exists(files)
+Signals <- lapply(files, read.xlsx)
+names(Signals) <- gsub(".xlsx", "", gsub("AAs_Signal_", "", basename(basename(files))))
+Signal <- data.table(Sample = rep(names(Signals), mapply(nrow, Signals)), do.call(rbind, Signals))
+
+write.xlsx(c(list(Merge = Signal), Signals), "./analysis/02.PolypeptideSequencing/20211025/Version1/Polypeptide2_1123.xlsx")
+```
+
+```{r}
+ggplot(Signal, aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  xlim(c(0.1, 0.3))
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+ppi <- pps[3]
+files <- paste0("./analysis/02.PolypeptideSequencing/20211025/Version1/AAs_Signal_", 
+                meta[amino_acid == ppi & amino_acid != "blank", file_name], ".xlsx")
+file.exists(files)
+Signals <- lapply(files, read.xlsx)
+names(Signals) <- gsub(".xlsx", "", gsub("AAs_Signal_", "", basename(basename(files))))
+Signal <- data.table(Sample = rep(names(Signals), mapply(nrow, Signals)), do.call(rbind, Signals))
+
+write.xlsx(c(list(Merge = Signal), Signals), "./analysis/02.PolypeptideSequencing/20211025/Version1/Polypeptide3_1124.xlsx")
+```
+
+```{r}
+ggplot(Signal[DwellTime > 2], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  xlim(c(0.1, 0.3)) + 
+  ylim(c(0, 10))
+```
+
+
+```{r}
+ggplot(Signal, aes(x = Blockade, y = Sample)) + 
+  geom_density_ridges(scale = 1) + 
+  xlim(c(0.1, 0.3))
+
+
+ggplot(iris, aes(x = Sepal.Length, y = Species)) +
+  geom_density_ridges(rel_min_height = 0.005) +
+  scale_y_discrete(expand = c(0.01, 0)) +
+  scale_x_continuous(expand = c(0.01, 0)) +
+  theme_ridges()
+```
+
+```{r}
+ggplot(diamonds, aes(x = price, y = cut)) +
+  geom_density_ridges(scale = 4) +
+  scale_y_discrete(expand = c(0.01, 0)) +
+  scale_x_continuous(expand = c(0.01, 0)) +
+  theme_ridges()
+```
+
+
+
+
+
+
+
+
+
+

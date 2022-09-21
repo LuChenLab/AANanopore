@@ -1,0 +1,281 @@
+---
+title: "Performance of all classifier"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+library(parallel)
+library(caret)
+library(openxlsx)
+library(cowplot)
+library(ggseqlogo)
+library(ggrepel)
+```
+
+```{r}
+set.seed(19)
+AA_Cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(AA_Cols) <- Biostrings::AA_STANDARD
+```
+
+```{r}
+AADensityPlot <- function(x, top = 4) {
+  ggplot(x, aes(Blockade, after_stat(count), fill = AA, colour = AA)) +
+    geom_density(adjust = 3, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(AA_Cols), values = AA_Cols, guide = guide_legend(ncol = 2)) + 
+    scale_colour_manual(breaks = names(AA_Cols), values = AA_Cols) + 
+    theme_bw(base_size = 15) -> p
+  pd <- ggplot_build(p)
+  tab <- head(as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ], top)
+  tab <- merge(tab, data.table(AA = names(AA_Cols), colour = AA_Cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA), size = 5)
+}
+```
+
+# 20211025
+
+```{r}
+files <- list.files("./analysis/02.PolypeptideSequencing/20211025/Version2/02.SignalPrediction", full.names = TRUE)
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ZhangMing_20211025/实验信息表1025.xlsx"))
+meta <- meta[!grepl("lank", amino_acid)]
+
+meta <- unique(meta[, .(file_name, amino_acid)])
+meta <- meta[file_name %in% gsub("AA_Signals_", "", gsub(".RData", "", basename(files)))]
+meta$amino_acid <- mapply(function(x) tail(x, 1), strsplit(mapply(function(x) tail(x, 1), strsplit(meta$amino_acid, ", ")), ") "))
+setkey(meta, file_name)
+```
+
+```{r}
+Polypeptide1_iden <- lapply(files, function(x) {
+  load(x)
+  Polypeptide1_iden$MaxPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, max)
+  Polypeptide1_iden$MinPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, min)
+  Polypeptide1_iden$MeanPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, mean)
+  Polypeptide1_iden
+})
+
+Polypeptide1_iden <- data.table(meta[rep(gsub("AA_Signals_", "", gsub(".RData", "", basename(files))), mapply(nrow, Polypeptide1_iden))], do.call(rbind, Polypeptide1_iden))
+```
+
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "APRLRFYSL" & Cutoff == "C6" & MinPP > 0.6])
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "DRVYIHPFHL" & Cutoff == "C2" & MinPP > 0.5])
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "RPVKVYPNGAEDESAEAFPLEF" & Cutoff == "C3" & MinPP > 0.6], top = 3)
+```
+
+
+
+
+# 20220314
+
+```{r}
+Signalsfiles <- list.files("./analysis/02.PolypeptideSequencing/20220314/Version1", ".Rds", full.names = TRUE)
+files <- list.files("./analysis/02.PolypeptideSequencing/20220314/Version1/02.SignalPrediction", full.names = TRUE)
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ZhangMing_20220314/neoantigen水解20220314.xlsx"))
+meta <- meta[!grepl("lank", amino_acid)]
+gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles)))[!gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles))) %in% meta$file_name]
+
+meta <- unique(meta[, .(file_name, amino_acid)])
+meta <- meta[file_name %in% gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles)))]
+meta$amino_acid <- mapply(function(x) x[2], strsplit(meta$amino_acid, ','))
+setkey(meta, file_name)
+```
+
+
+```{r}
+Polypeptide1_iden <- lapply(files, function(x) {
+  load(x)
+  Polypeptide1_iden$MaxPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, max)
+  Polypeptide1_iden$MinPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, min)
+  Polypeptide1_iden$MeanPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, mean)
+  Polypeptide1_iden
+})
+
+Polypeptide1_iden <- data.table(meta[rep(gsub("AA_Signals_", "", gsub(".RData", "", basename(files))), mapply(nrow, Polypeptide1_iden))], do.call(rbind, Polypeptide1_iden))
+```
+
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "VGAL" & Cutoff == "C4" & MinPP > 0.5])
+```
+ 
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "VGALD" & Cutoff == "C4" & MinPP > 0.5])
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LSGV" & Cutoff == "C1"], top = 5)
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LFGV" & Cutoff == "C6"], top = 5)
+```
+
+
+# 20220406
+
+```{r}
+Signalsfiles <- list.files("./analysis/02.PolypeptideSequencing/20220406/Version1", ".Rds", full.names = TRUE)
+files <- list.files("./analysis/02.PolypeptideSequencing/20220406/Version1/02.SignalPrediction", full.names = TRUE)
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ZhangMing_20220406/neoantigen水解20220406.xlsx"))
+meta <- meta[!grepl("lank", amino_acid)]
+gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles)))[!gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles))) %in% meta$file_name]
+meta[15, file_name := "Username_2022-03-16_009_2"]
+gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles)))[!gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles))) %in% meta$file_name]
+
+meta <- unique(meta[, .(file_name, amino_acid)])
+meta <- meta[file_name %in% gsub("BUB", "", gsub(".Rds", "", basename(Signalsfiles)))]
+meta <- meta[amino_acid != "LFGV-EF-53 mV"]
+setkey(meta, file_name)
+```
+
+```{r}
+Polypeptide1_iden <- lapply(files, function(x) {
+  load(x)
+  Polypeptide1_iden$MaxPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, max)
+  Polypeptide1_iden$MinPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, min)
+  Polypeptide1_iden$MeanPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, mean)
+  Polypeptide1_iden
+})
+
+Polypeptide1_iden <- data.table(meta[rep(gsub("AA_Signals_", "", gsub(".RData", "", basename(files))), mapply(nrow, Polypeptide1_iden))], 
+                                do.call(rbind, Polypeptide1_iden))
+```
+
+```{r}
+Polypeptide1_iden[, unique(amino_acid)]
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LFGV-53 mV" & Cutoff == "C6" & MaxPP > 0.9], top = 4)
+```
+
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LFGV-EF-50 mV" & Cutoff == "C4"], top = 4)
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LFGV-EF" & Cutoff == "C6"], top = 4)
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "LSGV " & Cutoff == "C6"], top = 4)
+```
+
+```{r}
+AADensityPlot(Polypeptide1_iden[amino_acid == "FEV" & Cutoff == "C3" & MaxPP > 0.5], top = 4)
+```
+
+
+
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ZhangMing_20220406/neoantigen水解20220406.xlsx"))
+meta <- meta
+
+meta$AA <- mapply(strsplit(meta[, amino_acid], "\\+"), FUN = function(x) {
+  paste0(plyr::mapvalues(x, tolower(AMINO_ACID_CODE), names(AMINO_ACID_CODE)), collapse = "")
+})
+
+setkey(meta, file_name)
+files <- list.files("./analysis/02.PolypeptideSequencing/20211025/Version2/02.SignalPrediction", full.names = TRUE)
+```
+
+```{r}
+load(files[1])
+Polypeptide1_iden$MaxPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, max)
+Polypeptide1_iden$MinPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, min)
+Polypeptide1_iden$MeanPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, mean)
+Polypeptide1_iden1 <- copy(Polypeptide1_iden)
+```
+
+```{r}
+load(files[2])
+Polypeptide1_iden$MaxPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, max)
+Polypeptide1_iden$MinPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, min)
+Polypeptide1_iden$MeanPP <- apply(Polypeptide1_iden[, .(RF, KNN, CART)], 1, mean)
+Polypeptide1_iden2 <- copy(Polypeptide1_iden)
+```
+
+```{r}
+Polypeptide1_iden <- rbind(Polypeptide1_iden1, Polypeptide1_iden2)
+```
+
+```{r fig.width=10, fig.height=6}
+ggplot(Polypeptide1_iden, aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) + 
+  facet_wrap( ~ Cutoff) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+```{r fig.width=10, fig.height=6}
+ggplot(Polypeptide1_iden[MaxPP > 0.9], aes(x = Blockade, y = DwellTime, colour = AA)) + 
+  geom_text(aes(label = AA)) + 
+  facet_wrap( ~ Cutoff) + 
+  scale_color_manual(values = AA_Cols) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+
+```{r}
+AADensityPlot <- function(x, top = 4) {
+  ggplot(x, aes(Blockade, after_stat(count), fill = AA, colour = AA)) +
+    geom_density(adjust = 3, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(AA_Cols), values = AA_Cols, guide = guide_legend(ncol = 2)) + 
+    scale_colour_manual(breaks = names(AA_Cols), values = AA_Cols) + 
+    theme_bw(base_size = 15) -> p
+  pd <- ggplot_build(p)
+  tab <- head(as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ], top)
+  tab <- merge(tab, data.table(AA = names(AA_Cols), colour = AA_Cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA), size = 5)
+}
+```
+
+
+```{r}
+AADensityPlot(Polypeptide1_iden[Cutoff == "C2"])
+```
+
+

@@ -1,0 +1,190 @@
+---
+title: "Polypeptide sequencing"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+  code_folding: "hide"
+toc: true
+toc_depth: 4
+toc_float: 
+  collapsed: false
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval      = T, #在块中运行代码(default = TRUE)
+                      highlight = T, #高亮显示
+                      echo      = F, #是否在输出中包含源代码
+                      tidy      = T, #是否整理代码
+                      error     = T, #是否在输出中包含错误信息
+                      warning   = F, #是否在输出中包含警告(default = TRUE)
+                      message   = F, #是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+source("./script/01.AASignalRecognition/Version6/SignalProcessing/AdditionalFunctions.R")
+library(openxlsx)
+library(data.table)
+```
+
+```{r}
+plotSig <- function(x) {
+  ggplot() + 
+    geom_line(data = x, mapping = aes(x = Time, y = pA)) + 
+    geom_line(data = x[L == "U"], mapping = aes(x = Time, y = pA), colour = "red", size = 1.1) + 
+    theme_minimal(base_size = 15)
+}
+
+plotSig2 <- function(x) {
+  ggplot() + 
+  geom_line(data = x, mapping = aes(x = Time, y = pA)) + 
+  # geom_line(data = x[L == "U"], mapping = aes(x = Time, y = pA), colour = "red", size = 1.1) + 
+  geom_line(data = x, mapping = aes(x = Time, y = Sm), colour = "red", size = 1.1) + 
+  theme_minimal(base_size = 15)
+}
+
+
+mean2 <- function(x, q1 = 0.25, q2 = 0.75) {
+  q <- quantile(x, c(q1, q2))
+  mean(x[x > min(q) & x < max(q)])
+}
+
+mean3 <- function(x, HT = 10) {
+  if(length(x) >= 5*HT) {
+    mean(x[(HT+1):(length(x) - HT)])
+  } else {
+    HT <- floor(length(x)/5)
+    mean(x[(HT+1):(length(x) - HT)])
+  }
+}
+
+BinSignal <- function(x) {
+  Sigs <- x[L == "U", unique(Sm)]
+  do.call(rbind, lapply(Sigs, function(s) {
+    DwellTime <- x[L == "U" & Sm == s, diff(range(Time)) * 1000]
+    StartTime <- x[L == "U" & Sm == s, min(Time)]
+    BaseLineMean <- x[L == "B", mean2(pA)]
+    SignalMean <- x[L == "U" & Sm == s, mean3(pA)]
+    SignalSD <- x[L == "U" & Sm == s, sd(pA)]
+    Blockade <- 1 - SignalMean/BaseLineMean
+    data.table(StartTime = StartTime, DwellTime, BaseLineMean, SignalMean, SignalSD, Blockade)
+  }))
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ZhangMing_20211025/实验信息表1025.xlsx"))
+meta <- meta[date != "1019"]
+meta[-(1:8)]
+```
+
+```{r}
+File <- "./data/ZhangMing_20211025/1022-ACTHx3 Ang1+1/21o22013.abf"
+StartTime <- 0
+EndTime <- 24.9
+
+phe <- readABF::readABF(File)
+phe <- as.data.table(as.data.frame(phe))
+colnames(phe) <- c("Time", "pA", "mV")
+```
+
+```{r }
+phe <- phe[Time > StartTime * 60 & Time < EndTime * 60, ]
+```
+
+```{r}
+phe <- phe[round(mV) == 50, ]
+phe <- phe[pA > 0, ]
+phe <- phe[pA < 130, ]
+phe$Sm <- KBins2(sig = phe$pA, pen.value = 1 - 1e-16, minseglen1 = 1, minseglen2 = 1)
+```
+
+```{r}
+DenSm <- density(phe[, Sm], adjust = 0.8)
+L0 <- L0Coor(DenSm)
+L0Min <- min(L0) * 0.9
+```
+
+```{r}
+plot(DenSm)
+abline(v = c(L0))
+abline(v = L0Min, col = 2)
+```
+
+```{r}
+plot(DenSm, xlab = "Current (pA)", main = "density of smooth current", xlim = c(50, 130))
+abline(v = L0, lty = 2, col = 2)
+abline(v = L0Min, lty = 2, col = 3)
+```
+
+```{r}
+phe[, L := NULL]
+phe[Sm <= max(L0) & Sm >= min(L0), L := "B"] # baseline
+phe[Sm < L0Min, L := "U"] # U shape
+phe[is.na(L), L := "O"] # Other
+
+BUB <- BUB_Sig(Mat = phe)
+BUB <- BUB[mapply(function(x) max(x$Sm), BUB) <= max(L0)]
+```
+
+```{r}
+L0F <- data.table(pA = mapply(function(x) x[L == "B", mean2(pA)], BUB), 
+                  Sm = mapply(function(x) x[L == "B", mean2(Sm)], BUB))
+rg <- quantile(L0F$pA, c(0.05, 0.95))
+BUB <- BUB[L0F[, pA > min(rg) & pA < max(rg)]]
+```
+
+```{r}
+BL_Sum <- mapply(BUB, FUN = function(x) sum(runLength(Rle(x[, L == "B"]))[runValue(Rle(x[, L == "B"])) == TRUE]))
+BL_Min <- mapply(BUB, FUN = function(x) min(runLength(Rle(x[, L == "B"]))[runValue(Rle(x[, L == "B"])) == TRUE]))
+BUB <- BUB[BL_Sum >= 500 & BL_Min >= 50]
+```
+
+```{r}
+Wid <- mapply(BUB, FUN = function(x) x[L == "U", diff(range(Time))])
+BUB <- BUB[Wid > 0.00075]
+length(BUB)
+```
+
+```{r}
+plot(density(do.call(rbind, BUB)[pA < L0Min & pA > 40, pA]), main = "Current density")
+```
+
+```{r}
+for(i in 1:20) {
+  print(plotSig2(BUB[[i]]) + labs(title = i))
+}
+```
+
+```{r}
+BinBUB <- mclapply(BUB, FUN = BinSignal, mc.cores = 1)
+```
+
+```{r}
+BinBUB2 <- lapply(BinBUB, FUN = function(x) {
+  if(any(x[, DwellTime > 0.75])) {
+    x[DwellTime > 0.75]
+  } else {
+    x[which.max(DwellTime)]
+  }
+})
+BinBUB2 <- lapply(seq_along(BinBUB2), function(i) data.table(Sigs = i, BinBUB2[[i]]))
+```
+
+```{r}
+BinBUB3 <- do.call(rbind, BinBUB2)
+```
+
+```{r}
+openxlsx::write.xlsx(BinBUB3, "./analysis/02.PolypeptideSequencing/20211025/Version1/AAs_Signal_21o22013.xlsx")
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = BinBUB3[Blockade < 0.3], mapping = aes(x = Blockade, y = DwellTime)) + 
+  theme_classic(base_size = 15) + 
+  theme(legend.position = "none")
+```
