@@ -1,0 +1,292 @@
+---
+title: "Figure 2a"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r functions}
+mean2 <- function(x, q1 = 0.25, q2 = 0.75) {
+  q <- quantile(x, c(q1, q2))
+  mean(x[x >= min(q) & x <= max(q)])
+}
+```
+
+```{r}
+set.seed(19)
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(aa_cols) <- Biostrings::AA_STANDARD
+```
+
+# a
+
+```{r}
+AAs <- openxlsx::read.xlsx("./data/AAsExamples.xlsx", sheet = 2)
+dim(AAs)
+setdiff(Biostrings::AMINO_ACID_CODE[Biostrings::AA_STANDARD], colnames(AAs))
+colnames(AAs) <- plyr::mapvalues(colnames(AAs), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+
+AAs <- na.omit(as.data.table(melt(AAs)))
+AAs <- AAs[, .(P = seq_len(.N), value), variable]
+AAs[, variable := factor(variable, levels = c("H", "K", "R", "E", "D", "G", "A", "V", "L", "M", "I", "F", "P", "W", "C", "S", "Y", "N", "Q", "T"))]
+AAs[variable %in% c("H", "K", "R", "E", "D"), group := "charged"]
+AAs[variable %in% c("G", "A", "V", "L", "M", "I", "F", "P", "W"), group := "nonpolar"]
+AAs[variable %in% c("C", "S", "Y", "N", "Q", "T"), group := "polar"]
+
+p1 <- ggplot(AAs[group == "charged"], aes(P, value)) + 
+  geom_line() + 
+  facet_wrap(~ variable, scales = "free_x", nrow = 1) + 
+  theme_void() + 
+  theme(strip.text = element_text(face = "bold", size = 16, colour = RColorBrewer::brewer.pal(n = 3, "Dark2")[1]))
+
+p2 <- ggplot(AAs[group == "nonpolar"], aes(P, value)) + 
+  geom_line() + 
+  facet_wrap(~ variable, scales = "free_x", nrow = 1) + 
+  theme_void() + 
+  theme(strip.text = element_text(face = "bold", size = 16, colour = RColorBrewer::brewer.pal(n = 3, "Dark2")[3]))
+
+p3 <- ggplot(AAs[group == "polar"], aes(P, value)) + 
+  geom_line() + 
+  facet_wrap(~ variable, scales = "free_x", nrow = 1) + 
+  theme_void() + 
+  theme(strip.text = element_text(face = "bold", size = 16, colour = RColorBrewer::brewer.pal(n = 3, "Dark2")[2]))
+
+p_a <- cowplot::plot_grid(p1, p2, p3, nrow = 1, rel_widths = c(5, 9, 6))
+```
+
+```{r fig.width=16, fig.height=3}
+p_a
+```
+
+```{r}
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2a.pdf", plot = p_a, width = 16, height = 3)
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2a.eps", plot = p_a, width = 16, height = 3)
+```
+
+
+# b
+
+
+```{r loading data}
+meta <- do.call(rbind, lapply(list.files("./analysis/01.AASignalRecognition/Version9/02.RangesL0L1/", ".txt", full.names = TRUE, recursive = T), fread))
+meta <- meta[, .(file_name, amino_acid, concentration, start_time, end_time)]
+meta[, file_name := as.character(file_name)]
+meta <- meta[!file_name %in% c("21205012", "21205021", "21201008", "21303003")]
+
+files <- list.files("./analysis/01.AASignalRecognition/Version9/04.FinalSignal", pattern = "_Sigs.txt", recursive = TRUE, full.names = T)
+AAs <- lapply(files, fread)
+names(AAs) <- gsub("_Sigs.txt", "", basename(files))
+for(i in seq_along(AAs)) AAs[[i]] <- data.table(file_name = names(AAs)[i], AAs[[i]])
+AA <- do.call(rbind, AAs)
+AA <- AA[!file_name %in% c("21205012", "21205021", "21201008", "21303003")]
+
+AA <- merge(meta, AA, by = "file_name")
+AA <- AA[!is.na(Blockade) & Outer == 0 & AreaRatio_L1 > 0.1]
+AA[, .N, amino_acid]
+AA[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+AA[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+AA[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+AA[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+aaBlockade <- lapply(AA[, unique(aa)], FUN = function(a) {
+  den <- AA[DwellTime > 0.75 & SignalSD < 3.5 & aa == a, density(Blockade, adjust = 2)]
+  SD <- AA[DwellTime > 0.75 & SignalSD < 3.5 & aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+
+```{r fig.width=6, fig.height=4}
+ggplot(data = AA[DwellTime > 0.75 & SignalSD < 3.5], 
+       mapping = aes(x = Blockade, colour = aa)) + 
+  geom_line(stat = "Density", adjust = 3) + 
+  scale_x_continuous(limits = c(0.1, 0.26)) +
+  scale_y_continuous(breaks = c(0, 75, 150), labels = c(0, 0.5, 1)) +
+  facet_wrap(~ Class, ncol = 1, strip.position = "right") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", 
+        # strip.background = element_blank(),
+        panel.grid = element_blank()) + 
+  geom_text_repel(data = aaBlockade, aes(x = x, y = y, label = aa)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(x = "Blockade", y = "Relative abundance") -> p_b
+p_b
+```
+
+```{r}
+g <- ggplot_gtable(ggplot_build(p_b))
+
+stripr <- which(grepl('strip-r', g$layout$name))
+fills <- RColorBrewer::brewer.pal(n = 3, "Dark2")[c(1, 3, 2)]
+k <- 1
+for (i in stripr) {
+  j <- which(grepl('rect', g$grobs[[i]]$grobs[[1]]$childrenOrder))
+  g$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+  k <- k+1
+}
+# grid::grid.draw(g)
+p_b <- as_ggplot(g)
+p_b
+```
+
+# c 
+
+```{r}
+A_V <- data.table(V = c(87.8, 188.2, 120.1, 115.4, 105.4, 140.9, 145.1, 59.9, 156.3, 166.1, 168, 172.7, 165.2, 189.7, 123.3, 91.7, 118.3, 227.9, 191.2, 138.8), 
+                  aa = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"))
+
+aaBlockade <- merge(aaBlockade, A_V, by = "aa")
+aaBlockade[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+```{r fig.height=4, fig.width=4}
+ggplot(aaBlockade, aes(x = V, y = x)) + 
+  geom_pointrange(mapping = aes(ymin = x - SD, ymax = x + SD, colour = Class)) + 
+  geom_smooth(method = "lm") + 
+  geom_text_repel(aes(label = aa)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4) + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) +
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2") -> p_c
+p_c
+```
+
+
+# d
+
+
+```{r}
+AA_N <- readRDS("./analysis/00.FigureTables/Jun23/Figure2/AA_velocity.Rds")
+AA_N[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+```{r fig.height=5, fig.width=10}
+ggplot(AA_N, aes(x = aa, y = N3, colour = Class)) + 
+  geom_boxplot() + 
+  geom_point() + 
+  theme_bw(base_size = 15) + 
+  labs(x = "Amino acid", y = expression(Signal~frequency~of~amino~acid~"("*μM^"-1"*" min"^-1*")")) + 
+  scale_colour_brewer(palette = "Dark2") + 
+  theme(legend.position = "none", 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p_d
+p_d
+```
+
+
+# e
+
+```{r}
+AAInfo <- readRDS(file = "./analysis/00.FigureTables/Jun23/Figure2/AA_DwellTime.Rds")
+AAInfo[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+```{r}
+ggplot(AAInfo[DwellTime > 0.75 & SignalSD < 3.5], aes(x = aa, y = DwellTime, colour = Class)) + 
+  geom_violin() +
+  stat_summary(fun.data = "mean_sd") + 
+  theme_bw(base_size = 15) + 
+  scale_y_log10() + 
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Amino acid", y = "Dwell time (ms)") + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(),
+        panel.grid = element_blank(), 
+        legend.title = element_blank()) -> p_e
+p_e
+```
+
+# f
+
+```{r}
+AA_N2 <- AA_N[, mean(N3), by = c("Class", "aa")]
+my_comp <- list(c("charged", "polar"), c("charged", "nonpolar"), c("polar", "nonpolar"))
+AA_N2[aa %in% c("H", "K", "R"), Group := "Positive"]
+AA_N2[aa %in% c("E", "D"), Group := "Negative"]
+```
+
+```{r}
+ggplot(AA_N2, aes(x = Class, y = V1, colour = Class, fill = Group)) + 
+  geom_boxplot() + 
+  geom_point(aes(shape = Group), position = position_dodge2(width = 0.9)) + 
+  theme_bw(base_size = 15) + 
+  labs(y = expression(Signal~frequency~of~amino~acid~"("*μM^"-1"*" min"^-1*")")) + 
+  scale_x_discrete(labels = c("charged(-)          \ncharged(+)", "polar", "nonpolar")) + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(NA, NA)) +
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), axis.text.x = element_text(angle = 30, vjust = c(1.1, 1, 1), hjust = c(0.8, 1, 1)), 
+        panel.grid = element_blank()) + 
+  stat_compare_means(comparisons = list(c("polar", "nonpolar"))) + 
+  lims(y = c(0, 47)) -> p_f
+p_f
+```
+
+```{r}
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2b.eps", plot = p_b, width = 6.6, height = 10)
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2c.eps", plot = p_c, width = 4, height = 5)
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2d.eps", plot = p_d, width = 5.4, height = 5)
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2e.eps", plot = p_e, width = 5.4, height = 5)
+ggsave(filename = "./analysis/00.FigureTables/Sep24/Figure2/Fig2f.eps", plot = p_f, width = 4, height = 5)
+```
+
+```{r fig.width=16, fig.height=12}
+layout <- c(
+  area(t = 1, b = 2, l = 1, r = 12),
+  area(t = 3, b = 8.8, l = 1, r = 5),
+  area(t = 3, b = 5, l = 6, r = 8),
+  area(t = 3, b = 5, l = 9, r = 12),
+  area(t = 6, b = 8, l = 6, r = 9),
+  area(t = 6, b = 8, l = 10, r = 12)
+)
+
+p_a + p_b + p_c + p_d + p_e + p_f + plot_layout(design = layout) + 
+  plot_annotation(tag_levels = "a") & 
+  theme(plot.tag = element_text(size = 24, face = 'bold'))
+# ggsave(plot = Ps, "./analysis/00.FigureTables/Sep24/Figure2/Fig2.pdf", width = 16, height = 12)
+```
+
+```{r}
+cairo_pdf("./analysis/00.FigureTables/Sep24/Figure2/Fig2.pdf", width = 16, height = 12)
+p_a + p_b + p_c + p_d + p_e + p_f + plot_layout(design = layout) + 
+  plot_annotation(tag_levels = "a") & 
+  theme(plot.tag = element_text(size = 24, face = 'bold'))
+dev.off()
+```

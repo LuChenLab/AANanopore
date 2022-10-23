@@ -18,7 +18,6 @@ knitr::opts_chunk$set(echo = TRUE,
                       message = FALSE, 
                       fig.align = 'center')
 knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
-knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
 ```
 
 ```{r required packages}
@@ -120,6 +119,10 @@ setkey(AUCs, Curve, Model)
 ```{r}
 MoldeCols <- RColorBrewer::brewer.pal(n = 6, name = "Dark2")
 names(MoldeCols) <- paste0("RF", 1:6)
+```
+
+```{r}
+saveRDS(roc_mat, file = "./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Test_ROCs.Rds")
 ```
 
 ```{r fig.width=6, fig.height=4}
@@ -230,6 +233,10 @@ setkey(AUCs, Curve, Model)
 ```{r}
 MoldeCols <- RColorBrewer::brewer.pal(n = 6, name = "Dark2")
 names(MoldeCols) <- paste0("RF", 1:6)
+```
+
+```{r}
+saveRDS(roc_mat, file = "./analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Valid_ROCs.Rds")
 ```
 
 ```{r fig.width=6, fig.height=4}
@@ -344,10 +351,12 @@ ggplot(cutoffList[Dataset %in% c("Test")], aes(x = Recovery * 100, y = Accuracy 
   scale_color_brewer(palette = "Dark2") + 
   lims(y = c(70, 100)) + 
   guides(colour = "none")
+saveRDS(cutoffList, file = "analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Cutoff_Recovery_Accuracy_Test.Rds")
 ggsave("analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Cutoff_Recovery_Accuracy_Test.pdf", width = 3.5, height = 3.5)
 ```
 
 ```{r fig.width=3.5, fig.height=3.5}
+cutoffList <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Cutoff_Recovery_Accuracy_Test.Rds")
 ggplot(cutoffList[Dataset %in% c("Validation")], aes(x = Recovery * 100, y = Accuracy * 100, colour = Model)) + 
   geom_line() + 
   theme_bw(base_size = 15) + 

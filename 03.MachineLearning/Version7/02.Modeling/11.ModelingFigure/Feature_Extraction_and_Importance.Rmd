@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE,
                       message = FALSE, 
                       fig.align = 'center')
 knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
-knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+# knitr::opts_knit$set(base.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
 ```
 
 ```{r required packages}

@@ -163,9 +163,16 @@ ggplot(Mat, aes(x = Exp, y = P, fill = Col)) +
 p4
 ```
 
+```{r}
+p1 <- p1 + scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c(0, 0.25, 0.5, 0.75, 1)) + lims(x = c(0.1, 0.25))
+p2 <- p2 + scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)*1.07, labels = c(0, 0.25, 0.5, 0.75, 1)) + lims(x = c(0.1, 0.25))
+p3 <- p3 + scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)*1.38, labels = c(0, 0.25, 0.5, 0.75, 1)) + lims(x = c(0.1, 0.25))
+p1 + p2 + p3
+```
+
 
 ```{r fig.width=12, fig.height=3}
-p1 <- p1 + theme(legend.position = "none") + labs(y = "Density of identified AAs", x = "")
+p1 <- p1 + theme(legend.position = "none") + labs(y = "Relative abundance\nof identified AAs", x = "")
 p2 <- p2 + theme(legend.position = "none") + labs(y = "")
 p3 <- p3 + theme(legend.position = "none") + labs(y = "", x = "")
 
@@ -173,23 +180,13 @@ p1 + p2 + p3 + p4 + plot_layout(nrow = 1)
 ```
 
 ```{r fig.width=12, fig.height=3}
-ps <- cowplot::plot_grid(p1, p2, p3, p4, nrow = 1)
+ps <- cowplot::plot_grid(p1, p2, p3, p4, nrow = 1, rel_widths = c(1.08, 1, 1, 1))
 ps
-ggsave(ps, filename = "./analysis/00.FigureTables/Sep24/Figure4/AA_Predict.pdf", width = 12, height = 3)
 ggsave(ps, filename = "./analysis/00.FigureTables/Sep24/Figure4/AA_Predict.eps", width = 12, height = 3)
+ggsave(ps, filename = "./analysis/00.FigureTables/Sep24/Figure4/AA_Predict.pdf", width = 12, height = 3)
 ```
 
-```{r}
-ps <- cowplot::plot_grid(p1, p2, p3, nrow = 1)
-ps;p4
-ggsave(ps, filename = "./analysis/00.FigureTables/Sep24/Figure4/AA_Predict1.eps", width = 9, height = 3)
-ggsave(p4, filename = "./analysis/00.FigureTables/Sep24/Figure4/AA_Predict2.tiff", width = 3, height = 3)
-```
 
-```{r}
-p3
-p4
-```
 
 
 

@@ -1,0 +1,103 @@
+---
+title: "Figure 2a"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(ggrepel)
+library(data.table)
+library(Biostrings)
+library(ggplot2)
+library(ggpubr)
+
+mean2 <- function(x, q1 = 0.25, q2 = 0.75) {
+  q <- quantile(x, c(q1, q2))
+  mean(x[x >= min(q) & x <= max(q)])
+}
+```
+
+```{r}
+meta <- do.call(rbind, lapply(list.files("./analysis/01.AASignalRecognition/Version9/02.RangesL0L1/", ".txt", full.names = TRUE, recursive = T), fread))
+meta <- meta[, .(file_name, amino_acid, concentration, start_time, end_time, TimeRatio)]
+meta[, file_name := as.character(file_name)]
+meta <- meta[!file_name %in% c("21205012", "21205021", "21201008", "21303003")]
+
+files <- list.files("./analysis/01.AASignalRecognition/Version9/04.FinalSignal", pattern = "_Sigs.txt", recursive = TRUE, full.names = T)
+AAs <- lapply(files, fread)
+names(AAs) <- gsub("_Sigs.txt", "", basename(files))
+for(i in seq_along(AAs)) AAs[[i]] <- data.table(file_name = names(AAs)[i], AAs[[i]])
+AA <- do.call(rbind, AAs)
+AA <- AA[!file_name %in% c("21205012", "21205021", "21201008", "21303003")]
+
+AA <- merge(meta, AA, by = "file_name")
+AA <- AA[!is.na(Blockade) & Outer == 0 & AreaRatio_L1 > 0.1]
+AA[, .N, amino_acid]
+AA[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+AA[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+AA[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "polar"]
+AA[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "nonpolar"]
+```
+
+```{r}
+aaBlockade <- lapply(AA[, unique(aa)], FUN = function(a) {
+  den <- AA[DwellTime > 0.75 & SignalSD < 3.5 & aa == a, density(Blockade, adjust = 2)]
+  SD <- AA[DwellTime > 0.75 & SignalSD < 3.5 & aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+A_V <- data.table(V = c(87.8, 188.2, 120.1, 115.4, 105.4, 140.9, 145.1, 59.9, 156.3, 166.1, 168, 172.7, 165.2, 189.7, 123.3, 91.7, 118.3, 227.9, 191.2, 138.8), 
+                  aa = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"))
+
+aaBlockade <- merge(aaBlockade, A_V, by = "aa")
+aaBlockade[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+```{r fig.width=4.2, fig.height=4.2}
+ggplot(aaBlockade[!aa %in% c("K", "R", "D", "E", "P", "H")], aes(x = V, y = x)) + 
+  geom_pointrange(mapping = aes(ymin = x - SD, ymax = x + SD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F, color = "grey") + 
+  geom_text_repel(aes(label = aa)) + 
+  stat_cor(aes(label = paste(..r.label.., ..rr.label.., ..p.label.., sep = "~`,`~")), 
+           label.y.npc = 0.05, label.x.npc = 0.15) + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) + 
+  theme(legend.position = "top", panel.grid = element_blank()) + 
+  scale_colour_manual(values = RColorBrewer::brewer.pal(n = 3, name = "Dark2")[2:3])
+ggsave("./analysis/00.FigureTables/Sep24/FigureS1/Blockade_Vs_Volume4_noKRDEPH_for_lm.pdf", width = 4.2, height = 4.5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
