@@ -1,0 +1,445 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+SigSumm <- sig0[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), .(AA, A)]
+SigSumm[, A := gsub("CbC", "CMC", A)]
+SigSumm[, AA := gsub("CbC", "CMC", AA)]
+SigSumm[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+SigSumm <- SigSumm[A != "CMC"]
+```
+
+```{r}
+files <- list.files("./analysis/86.TemperatureExperiment/02.SignalsDistance", "select_sigs.txt", recursive = T, full.names = T)
+sig0 <- do.call(rbind, lapply(files, fread))
+sig0[, temperature := factor(temperature)]
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = sig0[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = temperature), alpha = 0.5) + 
+  # geom_rect(data = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")]], aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = 100)) + 
+  # geom_vline(xintercept = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean]) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  scale_y_log10() + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.position = "none", 
+        legend.title = element_blank()) -> p1
+
+ggplot(data = sig0, aes(x = Blockade, colour = temperature)) + 
+  geom_line(stat = "density", adjust = 0.2) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  guides(colour = guide_legend(title = "Temperature")) + 
+  theme_void() + 
+  theme(legend.position = "top") -> p2
+```
+
+```{r}
+p2 / p1 + plot_layout(ncol = 1, heights = c(1, 3))
+```
+
+```{r eval=FALSE}
+ggplot() + 
+  geom_point(data = sig0[Blockade < 0.3 & SignalCurrentPercent > 50], aes(x = Blockade, y = DwellTime, colour = temperature), alpha = 0.5) + 
+  # geom_rect(data = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")]], aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = 100), alpha = 0.4) +
+  # geom_vline(xintercept = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean]) +
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  scale_y_log10() + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.position = "none", 
+        legend.title = element_blank())
+```
+
+```{r}
+B_file <- sig0[, as.character(unique(file_name))]
+Sig_FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sig0$ID]
+})
+Sig_FeatureMatrix <- do.call(rbind, Sig_FeatureMatrix)
+```
+
+```{r}
+LineMat <- melt.data.table(Sig_FeatureMatrix, id.vars = "ID")
+LineMat <- LineMat[grepl("^X", variable)]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r}
+fit1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.TrainModels/ModelEFKS.Rds")
+```
+
+```{r}
+pred0 <- predict(fit1, Sig_FeatureMatrix)
+pred1 <- predict(fit1, Sig_FeatureMatrix, type = "prob")
+pred <- data.table(ID = Sig_FeatureMatrix$ID, pred = pred0, prob = apply(pred1, 1, max))
+```
+
+```{r}
+sig1 <- merge(sig0, pred, by = "ID")
+```
+
+```{r eval=FALSE}
+hist(sig1[, prob], breaks = 100)
+```
+
+```{r fig.width=12, fig.height=4, eval=FALSE}
+ggplot(data = sig1[prob > 0.8], aes(x = Blockade, y = DwellTime, colour = pred)) + 
+  geom_point(alpha = 0.5) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  scale_y_log10() + 
+  facet_wrap(~ pred) + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(), 
+        # legend.position = "none", 
+        legend.title = element_blank())
+```
+
+```{r, eval=FALSE}
+sig1[prob > 0.5 & Blockade < 0.3, .N, pred][order(N, decreasing = T)]
+sig1[prob > 0.6 & Blockade < 0.3, .N, pred][order(N, decreasing = T)]
+```
+
+
+```{r}
+FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig1[prob > 0.8 & pred == "Glu", ID]]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r eval=FALSE}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r eval=FALSE, fig.width=16, fig.height=4}
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = temperature), size = 1) + 
+  scale_y_log10() + 
+  # scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]))
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+sig2_Glu <- merge(sig1, cl, by = "ID")
+```
+
+
+
+```{r}
+FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig1[prob > 0.8 & pred == "Ser", ID]]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r eval=FALSE}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r eval=FALSE, fig.width=16, fig.height=4}
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = temperature), size = 1) + 
+  scale_y_log10() + 
+  # scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]))
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+sig2_Ser <- merge(sig1, cl, by = "ID")
+```
+
+
+
+```{r}
+FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig1[prob > 0.8 & pred == "Phe", ID]]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r eval=FALSE}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r eval=FALSE, fig.width=16, fig.height=4}
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = temperature), size = 1) + 
+  scale_y_log10() + 
+  # scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]))
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+sig2_Phe <- merge(sig1, cl, by = "ID")
+```
+
+
+```{r}
+FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig1[prob > 0.8 & pred == "Lys", ID]]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r eval=FALSE}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r eval=FALSE, fig.width=16, fig.height=4}
+ggplot(data = merge(sig0, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = temperature), size = 1) + 
+  scale_y_log10() + 
+  # scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]))
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r}
+cl[, State := ifelse(cluster %in% c(2), "Sington", "Mixtrue")]
+sig2_Lys <- merge(sig1, cl, by = "ID")
+```
+
+```{r}
+sig2 <- rbind(sig2_Glu, sig2_Ser, sig2_Phe, sig2_Lys)
+```
+
+```{r}
+fwrite(sig2, "./analysis/86.TemperatureExperiment/03.GroupedSignals/GroupedSignals.txt", sep = "\t", quote = FALSE)
+```
+

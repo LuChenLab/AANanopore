@@ -1,0 +1,253 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+KnnSelecting <- function(signals, dists, dist_method = "euclidean", k = 20, noise = 0) {
+  stopifnot(noise < k)
+  if(is(dists, "dist")) {
+    knn1 <- dbscan::kNN(dists, k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists, "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  } else {
+    knn1 <- dbscan::kNN(dists[[dist_method]], k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists[[dist_method]], "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  }
+  
+  tu <- row.names(knn1$id)[which(rowSums(knn2) <= noise)]
+  # tu <- union(tu, knn2[which(rowSums(knn2) <= noise), 1])
+  tu <- grep("^Noise", tu, invert = TRUE, value = TRUE)
+  ggplot(signals, aes(x = Blockade, y = DwellTime, colour = !ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = c("#E41A1C", "#377EB8")) + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p1
+  ggplot(signals[ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#E41A1C") + 
+    theme_classic() + 
+    theme(legend.position = "none") + 
+    labs(title = length(tu)) -> p2
+  ggplot(signals[!ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#377EB8") + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p3
+  print(p1 + p2 + p3)
+  return(tu)
+}
+
+RemoveOutlier <- function(tree, n = 10, Keep = 0.95) {
+  h <- length(tree$height)
+  g <- cutree(tree, h = tree$height[h])
+  g <- data.table(tip = names(g), cluster = g)
+  
+  while (g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] > Keep) {
+    h <- h - 1
+    g <- cutree(tree, h = tree$height[h])
+    g <- data.table(tip = names(g), cluster = g)
+  }
+  cat(paste0("Keep: ", round(g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] * 100, 2), "%"))
+  g[cluster %in% g[, .N, cluster][N >= n, cluster], tip]
+}
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231024/20231024_data.xlsx", sheet = 1))
+meta <- meta[实验目的 == "阿尔兹海默症突变位点" & grepl("20231024", 文件名)]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "baseline", "note")
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/84.ADpolypeptide/21.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/84.ADpolypeptide/21.SelectedL0/", file_id, ".MainL0.txt")]
+```
+
+# LVFAK
+
+```{r}
+meta[amino_acid == "LVFAK"]
+```
+
+```{r fig.width=24, fig.height=6}
+dataset <- do.call(rbind, lapply(meta[amino_acid == "LVFAK", sig_file], fread))[Blockade < 0.35 & DwellTime > 0.3]
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(meta[amino_acid == "LVFAK", file_name]), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+FeatureMatrix <- FeatureMatrix[ID %in% dataset$ID]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+```
+
+
+# 20231024_0005.1
+
+```{r fig.width=24, fig.height=6}
+alldists <- readRDS(file.path("./analysis/84.ADpolypeptide/22.SignalDistance/20231024_0005.1.signal.dist.Rds"))
+sigs <- KnnSelecting(signals = dataset[A == "20231024_0005.1"], dists = alldists, k = 8, noise = 1)
+```
+
+```{r}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 20, Keep = 0.8)
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+
+```{r fig.width=12, fig.height=4}
+ggplot(dataset[A == "20231024_0005.1"], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+  scale_x_continuous(sec.axis = dup_axis(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], 
+                                         labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], AA])) + 
+  theme(axis.title.x.top = element_blank())
+```
+
+```{r}
+fwrite(dataset[ID %in% sigs], file.path("./analysis/84.ADpolypeptide/23.SelectedSignals/LVFAK.20231024_0005.1.selected.signals.txt"), sep = "\t", quote = F)
+```
+
+
+# 20231024_0007.1
+
+```{r fig.width=24, fig.height=6}
+alldists <- readRDS(file.path("./analysis/84.ADpolypeptide/22.SignalDistance/20231024_0007.1.signal.dist.Rds"))
+sigs <- KnnSelecting(signals = dataset[A == "20231024_0007.1"], dists = alldists, k = 8, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 20, Keep = 0.8)
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+
+```{r fig.width=12, fig.height=4}
+ggplot(dataset[A == "20231024_0007.1"], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+  scale_x_continuous(sec.axis = dup_axis(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], 
+                                         labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], AA])) + 
+  theme(axis.title.x.top = element_blank())
+```
+
+```{r}
+fwrite(dataset[ID %in% sigs], file.path("./analysis/84.ADpolypeptide/23.SelectedSignals/LVFAK.20231024_0007.1.selected.signals.txt"), sep = "\t", quote = F)
+```
+
+
+# All
+
+```{r fig.width=24, fig.height=6}
+alldists <- readRDS(file.path("./analysis/84.ADpolypeptide/22.SignalDistance/LVFAK_all_sigs_distance_CSC231024.Rds"))
+sigs <- KnnSelecting(signals = dataset, dists = alldists, k = 8, noise = 0)
+```
+
+```{r}
+sigs <- intersect(sigs, dataset[Blockade < 0.25, ID])
+```
+
+```{r}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 20, Keep = 0.8)
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+
+```{r fig.width=12, fig.height=4}
+ggplot(dataset, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+ggplot(dataset[ID %in% sigs], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+  scale_x_continuous(sec.axis = dup_axis(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], 
+                                         labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], AA])) + 
+  theme(axis.title.x.top = element_blank())
+```
+
+```{r}
+fwrite(dataset[ID %in% sigs], file.path("./analysis/84.ADpolypeptide/23.SelectedSignals/LVFAK.selected.signals_CSC231024.txt"), sep = "\t", quote = F)
+```
+

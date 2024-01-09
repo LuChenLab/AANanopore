@@ -1,0 +1,73 @@
+---
+title: "Supplementary Figure 13"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+L <- readRDS("analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Low_trace.Rds")
+M <- readRDS("analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Med_trace.Rds")
+H <- readRDS("analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Hig_trace.Rds")
+```
+
+```{r}
+tracedata <- rbind(data.table(Concentration = "1 μM", L[[1]]), data.table(Concentration = "4 μM", M[[1]]), data.table(Concentration = "16 μM", H[[1]]))
+tracedata[, Concentration := factor(Concentration, levels = c("1 μM", "4 μM", "16 μM"))]
+labeldata <- rbind(data.table(Concentration = "1 μM", L[[2]][, .(StartTime, EndTime, A)]), 
+                   data.table(Concentration = "4 μM", M[[2]][, .(StartTime, EndTime, A)]), 
+                   data.table(Concentration = "16 μM", H[[2]][, .(StartTime, EndTime, A)]))
+labeldata[, Time := StartTime + (EndTime - StartTime)/2]
+labeldata[, Concentration := factor(Concentration, levels = c("1 μM", "4 μM", "16 μM"))]
+```
+
+```{r}
+openxlsx::write.xlsx(list(tracedata, labeldata[, .(Concentration, Time, A)]), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig13.xlsx", overwrite = T)
+```
+
+```{r fig.width=22, fig.height=7}
+ggplot(tracedata, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = labeldata, aes(x = Time, y = 1.08, label = A), direction = "y") + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  scale_y_continuous(limits = c(0.5, 1.1)) + 
+  facet_wrap(~ Concentration, ncol = 1) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude") + 
+  theme_bw(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        strip.background = element_blank(), 
+        strip.text = element_text(hjust = 0), 
+        plot.background = element_blank())
+```
+
+
+
+

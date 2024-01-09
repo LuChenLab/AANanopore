@@ -1,0 +1,151 @@
+---
+title: "Figure 3"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/Modeling_Data.RData")
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelACDEFGHIKLMNPQRSTVWY/RFmodel.Rds")
+Sigs_Train_Upsample <- Sigs_Train_Upsample[AA %in% model1$levels]
+train_res <- data.table(ID = Sigs_Train_Upsample$ID, Obse = Sigs_Train_Upsample$AA, Pred = model1$finalModel$predicted, Prob = apply(model1$finalModel$votes, 1, max))
+train_res[, Obse := factor(Obse, levels = train_res[, levels(Pred)])]
+train_res[, mean(Obse == Pred)]
+
+test_res <- data.table(ID = Sigs_Test$ID, Obse = Sigs_Test$AA, Pred = predict(model1, Sigs_Test_FM), Prob = apply(predict(model1, Sigs_Test_FM, type = "prob"), 1, max))
+test_res <- test_res[Obse != "CMC"]
+test_res[, Obse := factor(Obse, levels = test_res[, levels(Pred)])]
+test_res[, mean(Obse == Pred)]
+model1_res <- rbind(data.table(train_res, Dataset = "Training"), data.table(test_res, Dataset = "Testing"))
+```
+
+```{r}
+cutoffList <- lapply(1:50/50, function(b) {
+  merge(model1_res[, .(Recovery = mean(Prob >= b) * 100), by = Dataset], 
+        model1_res[Prob >= b, .(Accuracy = mean(Obse == Pred) * 100), by = Dataset])
+})
+cutoffList <- data.table(Cutoff = rep(1:50/50, mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+cutoffList[, L := paste0("(", round(Recovery, 1), ", ", round(Accuracy, 1), ")")]
+```
+
+```{r fig.width=4, fig.height=4}
+ggplot(cutoffList, aes(x = Recovery, y = Accuracy, colour = Dataset)) + 
+  geom_line() + 
+  scale_x_reverse() + 
+  labs(x = "Recovery (%)", y = "Accuracy (%)", tag = "b") + 
+  # geom_point(data = cutoffList[Cutoff %in% c(c(6)/10)]) +
+  # geom_text_repel(data = cutoffList[Cutoff %in% c(c(6)/10)], aes(x = Recovery, y = Accuracy, label = L)) +
+  scale_color_brewer(palette = "Set1", guide = guide_legend(reverse = T)) + 
+  theme_bw(base_size = 15) + 
+  theme(#legend.position = "top", 
+        legend.position = c(.75, .25),
+        panel.grid = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold")) -> p1
+```
+
+```{r}
+cM <- test_res[, confusionMatrix(Pred, Obse)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), 
+        legend.position = "bottom")  -> p2
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) + 
+  geom_col(fill = "#A50F15") + 
+  labs(tag = "c") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.title.y = element_text(hjust = 0), 
+        plot.tag = element_text(size = 20, face = "bold"),
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) -> p3
+```
+
+```{r fig.width=4.5, fig.height=6}
+p3 / p2 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+vImp <- varImp(model1, scale = F)
+vImp <- data.table(Importance = vImp$importance[, 1], Variable = row.names(vImp$importance), x = as.numeric(gsub("X", "", row.names(vImp$importance))))
+```
+
+```{r}
+ggplot(vImp[!is.na(x)], aes(x = x, y = Importance)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), labels = c("X0001", "X0250", "X0500", "X0750", "X1000")) + 
+  labs(x = "Predictors") + 
+  ggthemes::theme_clean(base_size = 20)
+```
+
+
+```{r}
+ggplot(vImp[!is.na(x)], aes(x = x, y = Importance)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), labels = c("X0001", "X0250", "X0500", "X0750", "X1000"), 
+                     sec.axis = dup_axis(name = "Blockade", breaks = c(0, 250, 500, 750, 1000), labels = c(1, 0.75, 0.5, 0.25, 0))) + 
+  labs(x = "Predictors", tag = "d") + 
+  theme_bw(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank()) -> p4
+p4
+```
+
+
+```{r fig.height=6.2, fig.width=12, echo=FALSE}
+design <- "
+  111122224444
+  111133334444
+  111133334444
+  111133334444
+  111133334444
+"
+p1 + p3 + p2 + p4 + 
+  plot_layout(design = design)
+```
+

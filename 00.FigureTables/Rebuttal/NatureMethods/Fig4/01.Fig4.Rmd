@@ -1,0 +1,280 @@
+---
+title: "Figure 2"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+names(aa_cols) <- plyr::mapvalues(names(aa_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+FHL_1 <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FHL_prediction.txt", sep = "\t")
+FYSL_1 <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FYSL_prediction.txt", sep = "\t")
+LEF_1 <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/LEF_prediction.txt", sep = "\t")
+```
+
+```{r}
+FHL_1[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+FYSL_1[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+LEF_1[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred1 %in% x[, .N, Pred1][N > 3, Pred1]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred1, colour = Pred1), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA, colour = AA), size = 4, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = FYSL_1[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+AADensityPlot1(x = FYSL_1, target = strsplit("FYSL", "")[[1]]) -> p2
+p2 <- p2 + labs(tag = "c") + theme_void() + theme(plot.tag = element_text(face = "bold", size = 20), legend.position = "none")
+p2
+```
+
+
+
+
+```{r}
+ggplot() + 
+  geom_point(data = FHL_1[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p3
+p3
+```
+
+```{r}
+AADensityPlot1(x = FHL_1, target = c("F", "His1", "His2", "L" )) -> p4
+p4 <- p4 + theme_void() + theme(plot.tag = element_text(face = "bold", size = 20), legend.position = "none")
+p4
+```
+
+
+
+
+```{r}
+ggplot() + 
+  geom_point(data = LEF_1[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p5
+p5
+```
+
+```{r}
+AADensityPlot1(x = LEF_1, target = c("F", "E", "L" )) -> p6
+p6 <- p6 + theme_void() + theme(plot.tag = element_text(face = "bold", size = 20), legend.position = "none")
+p6
+```
+
+```{r}
+tab1 <- rbind(data.table(P = "P1", FYSL_1), data.table(P = "P2", FHL_1), data.table(P = "P3", LEF_1))
+tab1 <- tab1[, .N, .(P, Pred1)]
+tab1 <- tab1[, .(Pred1, N, Percent = N /sum(N) * 100), P]
+```
+
+```{r}
+ggplot(tab1, aes(x = P, y = Percent, fill = Pred1)) + 
+  geom_col() + 
+  geom_text(aes(label = paste(Pred1, N)), position = position_stack(vjust = 0.5), colour = "white", size = 3.5) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Percentage (%)", x = "Peptides", tag = "d") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p7
+p7
+```
+
+
+```{r fig.height=4, fig.width=13, echo=FALSE}
+design <- "
+  1357
+  2467
+  2467
+"
+p2 + p1 + p4 + p3 + p6 + p5 + p7 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/NatureMethods/Fig4/Fig4.pdf", width = 13, height = 4)
+```
+
+
+
+# AD
+
+```{r}
+LVFAG <- fread(file.path("./analysis/84.ADpolypeptide/03.SelectedSignals/LVFAG.selected.signals.txt"), sep = "\t")
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFAG[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+model0 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelACDEFGHIKLMNPQRSTVWY/RFmodel.Rds")
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFGLV/RFmodel.Rds")
+```
+
+
+```{r}
+subtab <- FeatureMatrix[LVFAG$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAG_1 <- merge(LVFAG, pred1, by = "ID")
+LVFAG_1 <- data.table(LVFAG_1, D1 = LVFAG_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+LVFAG_1[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+
+```{r}
+ggplot() + 
+  geom_point(data = LVFAG_1[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p8
+p8
+```
+
+```{r}
+AADensityPlot1(x = LVFAG_1, target = c("L", "V", "F", "A", "G")) -> p9
+p9 <- p9 + theme_void() + theme(plot.tag = element_text(face = "bold", size = 20), legend.position = "none")
+p9
+```
+
+
+```{r}
+tab2 <- rbind(data.table(P = "P1", FYSL_1), data.table(P = "P2", FHL_1), data.table(P = "P3", LEF_1), data.table(P = "P4", LVFAG_1))
+tab2 <- tab2[, .N, .(P, Pred1)]
+tab2 <- tab2[, .(Pred1, N, Percent = N /sum(N) * 100), P]
+```
+
+
+```{r}
+ggplot(tab2, aes(x = P, y = Percent, fill = Pred1)) + 
+  geom_col() + 
+  geom_text(aes(label = paste(Pred1, N)), position = position_stack(vjust = 0.5), colour = "white", size = 3.5, angle = 90) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Percentage (%)", x = "Peptides", tag = "d") + 
+  coord_flip() + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p10
+p10
+```
+
+
+```{r fig.height=7, fig.width=12, echo=FALSE}
+design <- "
+  135
+  246
+  246
+  799
+  899
+  899
+"
+p2 + p1 + p4 + p3 + p6 + p5 + p9 + p8 + p10 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/NatureMethods/Fig4/Fig4_2.pdf", width = 12, height = 7)
+```
+

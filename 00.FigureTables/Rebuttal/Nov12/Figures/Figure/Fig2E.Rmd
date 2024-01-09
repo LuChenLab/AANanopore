@@ -1,0 +1,76 @@
+---
+title: "Figure 2 E"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+
+```{r}
+Sigs1 <- as.data.table(openxlsx::read.xlsx("./script/00.FigureTables/Rebuttal/NatureMethods/Fig2/d.xlsx", 1))
+DwellTime <- as.data.table(openxlsx::read.xlsx("./script/00.FigureTables/Rebuttal/NatureMethods/Fig2/d.xlsx", 2))
+```
+
+```{r}
+od <- DwellTime[order(Class, half.life), A]
+Sigs1[, A := factor(A, levels = od)]
+Sigs1[, AA := gsub("CbC", "CMC", AA)]
+Sigs1[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+Sigs1[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+Sigs1[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+Sigs1[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+```
+
+```{r fig.height=5, fig.width=6.5}
+ggplot() + 
+  geom_violin(data = Sigs1[A != "CMC"], aes(x = A, y = DwellTime, colour = Class)) +
+  geom_pointrange(data = DwellTime, aes(x = A, y = half.life, ymin = half.life - half.life_Std.Error, ymax = half.life + half.life_Std.Error), size = 0.5) + 
+  scale_y_log10() +
+  theme_bw(base_size = 22) + 
+  scale_colour_manual(values = RColorBrewer::brewer.pal(n = 3, name = "Dark2")[c(1, 3, 2)]) + 
+  labs(x = "Amino acid", y = "Dwell time (ms)", tag = "e") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        panel.grid = element_blank(), 
+        legend.title = element_blank())
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig2E.pdf", width = 6.5, height = 5)
+```
+

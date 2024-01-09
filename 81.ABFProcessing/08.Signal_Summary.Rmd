@@ -1,0 +1,468 @@
+---
+title: "Summary"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(ggpubr)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", ".signal.txt", full.names = T)
+Sigs0 <- lapply(files, function(x) {
+  y <- fread(x)
+  y$D <- y[, get_density(x = Blockade, y = log10(DwellTime))]
+  y
+})
+names(Sigs0) <- gsub(".signal.txt", "", basename(files))
+Sigs0 <- data.table(A = rep(names(Sigs0), mapply(nrow, Sigs0)), do.call(rbind, Sigs0))
+```
+
+```{r}
+Sigs1 <- Sigs0[State == "Sington"]
+Sigs2 <- Sigs0[State == "Mixtrue"]
+```
+
+```{r}
+hist(Sigs1[, SignalCurrentPercent])
+```
+
+```{r fig.width=12, fig.height=6}
+ggplot(Sigs1, aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = c(0.1, 0.2, 0.3), limits = c(0.1, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_wrap(~ AA, nrow = 3) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank())
+```
+
+
+```{r fig.width=12, fig.height=6}
+ggplot(Sigs2, aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_wrap(~ AA, nrow = 3) + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank())
+```
+
+
+
+```{r fig.width=18, fig.height=8}
+ggplot(Sigs0, aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10() + 
+  scale_x_continuous(n.breaks = 4) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_wrap(~ AA, nrow = 3, scales = "free") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank())
+```
+
+
+
+
+
+```{r}
+Sigs0[AA %in% Sigs0[, unique(AA)][1:7], Group := 1]
+Sigs0[AA %in% Sigs0[, unique(AA)][8:14], Group := 2]
+Sigs0[AA %in% Sigs0[, unique(AA)][15:21], Group := 3]
+Sigs0[, State := factor(State, levels = c("Sington", "Mixtrue"))]
+```
+
+```{r fig.width=18, fig.height=8}
+ggplot(Sigs0[Group == 1], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10(n.breaks = 4) + 
+  scale_x_continuous(n.breaks = 4) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_grid(State ~ AA, scales = "free_x") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) -> p1
+ggplot(Sigs0[Group == 2], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10(n.breaks = 4) + 
+  scale_x_continuous(n.breaks = 4) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_grid(State ~ AA, scales = "free_x") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) -> p2
+ggplot(Sigs0[Group == 3], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point(size = 0.5) + 
+  scale_y_log10(n.breaks = 4) + 
+  scale_x_continuous(n.breaks = 4) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  facet_grid(State ~ AA, scales = "free_x") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) -> p3
+```
+
+```{r fig.width=16, fig.height=10}
+p1 <- p1 + theme(axis.title.x = element_blank())
+p2 <- p2 + theme(axis.title.x = element_blank())
+p1 + p2 + p3 + plot_layout(ncol = 1)
+```
+
+
+```{r}
+SigSumm <- Sigs1[, .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), .(AA, A)]
+```
+
+
+```{r fig.width=12, fig.height=6}
+ggplot(SigSumm, aes(x = BlockadeMean, y = DwellTimeMedian, colour = A)) + 
+  geom_pointrange(aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_text_repel(aes(label = A)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") +
+  scale_y_sqrt() + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+
+
+```{r fig.width=12, fig.height=6}
+ggplot() + 
+  geom_point(data = Sigs1, aes(x = Blockade, y = DwellTime, colour = A, alpha = D), size = 0.5) +
+  geom_pointrange(data = SigSumm, aes(x = BlockadeMean, y = DwellTimeMedian, xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(data = SigSumm, aes(x = BlockadeMean, y = DwellTimeMedian, ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_label_repel(data = SigSumm, aes(x = BlockadeMean, y = DwellTimeMedian, label = A, colour = A)) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", strip.background = element_blank(),
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank())
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+A_Fea <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/AA_feature.xlsx"))
+A_Fea <- rbind(A_Fea, 
+               A_Fea[Abb == "H", .(Amino.acid, Abbreviations = "His1", Abb = "H1", `Molecular.mass.(Da)`, `Number.of.atoms`, `Volume.(A3)`)], 
+               A_Fea[Abb == "H", .(Amino.acid, Abbreviations = "His2", Abb = "H2", `Molecular.mass.(Da)`, `Number.of.atoms`, `Volume.(A3)`)])
+SigSumm <- merge(A_Fea, SigSumm, by.x = "Abbreviations", by.y = "A")
+```
+
+```{r}
+SigSumm[Abb %in% c("E", "D", "H", "H1", "H2", "R", "K"), Class := "charged"]
+SigSumm[Abb %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+SigSumm[Abb %in% c("S", "N", "Q", "T", "Y", "C", "B"), Class := "polar"]
+SigSumm[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+
+```{r }
+ggplot(SigSumm, aes(x = `Volume.(A3)`, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = Abb)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  # labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) +
+  labs(y = "Blockade", x = expression("Volume of amino acid ("*A^3*")")) + 
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+
+ggplot(SigSumm[!Abb %in% c("D", "E", "K", "R", "H1", "H2", "C")], aes(x = `Volume.(A3)`, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = Abb)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  # labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid ("*A^3*")")) + 
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+```
+
+
+```{r }
+ggplot(SigSumm, aes(x = `Molecular.mass.(Da)`, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = Abb)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Molecular mass of amino acid (Da)")) + 
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+
+ggplot(SigSumm[!Abb %in% c("D", "E", "K", "R", "H1", "H2", "C")], aes(x = `Molecular.mass.(Da)`, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = Abb)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Molecular mass of amino acid (Da)")) + 
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+```
+
+```{r}
+State_N <- Sigs0[, .N, .(A, State)]
+State_N <- State_N[, .(State, N, P = N / sum(N) * 100), A]
+State_N[, A := factor(A, levels = State_N[State != "Sington"][order(P), A])]
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(State_N, aes(x = A, y = P, fill = State)) + 
+  geom_col() + 
+  geom_text(aes(label = N), position = position_stack(vjust = 0.5), angle = 0) + 
+  scale_fill_brewer(palette = "Paired", guide = guide_legend(reverse = T)) + 
+  coord_flip() + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Percentage (%)", x = expression("Amino acid")) + 
+  theme(legend.position = "top", 
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank())
+```
+
+
+
+```{r}
+file <- list.files("analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/04.IntervalTime", full.names = T)
+IntervalTime <- lapply(file, fread)
+names(IntervalTime) <- gsub("_IntervalTime.txt", "", basename(file))
+IntervalTime <- data.table(A = rep(names(IntervalTime), mapply(nrow, IntervalTime)), do.call(rbind, IntervalTime))
+```
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+InteTime <- merge(IntervalTime, meta[concentration > 0, .(file_name, concentration)], by.x = "File", by.y = "file_name")
+InteTime[, concentration := factor(concentration, levels = c("1", "2", "4", "5", "10", "20", "100", "200"))]
+od <- InteTime[, mean(Time2), A][order(V1), as.character(A)]
+InteTime[, AA := factor(A, levels = od)]
+```
+
+
+```{r fig.width=12, fig.height=3}
+ggplot(InteTime, aes(x = AA, y = Time2 * 1000, colour = concentration)) + 
+  geom_boxplot() + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Reds", guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+ggplot(InteTime, aes(x = AA, y = Time2 * 1000, colour = concentration)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = RColorBrewer::brewer.pal(n = 9, name = "Reds")[-1], guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+```
+
+
+```{r}
+InteTime_I <- InteTime[, .(Mean = mean(Time2), Median = median(Time2)), .(AA, concentration)]
+```
+
+
+
+
+
+
+
+```{r}
+InteTime_10 <- InteTime[concentration == 10]
+InteTime_10[, AA := factor(AA, levels = InteTime_10[concentration == 10, median(Time2), AA][order(V1), as.character(AA)])]
+
+ggplot(InteTime_10, aes(x = AA, y = Time2 * 1000, colour = AA)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(y = "Interval time (ms)", title = "10 uM") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank())
+
+InteTime_100 <- InteTime[concentration == 100]
+InteTime_100[, AA := factor(AA, levels = InteTime_100[concentration == 100, median(Time2), AA][order(V1), as.character(AA)])]
+
+ggplot(InteTime_100, aes(x = AA, y = Time2 * 1000, colour = AA)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(y = "Interval time (ms)", title = "100 uM") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+```
+
+```{r}
+InteTime[AA == "Pro", wilcox.test(Time2 ~ concentration)]
+InteTime[AA == "Pro", kruskal.test(Time2 ~ concentration)]
+```
+
+```{r}
+InteTime_Sub <- InteTime[AA %in% AMINO_ACID_CODE[c("D", "E", "K", "R")] & concentration == 100]
+InteTime_Sub <- InteTime[concentration == 100]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("D", "E")], Property := "Negatively charged"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("K", "R", "H")], Property := "Positively charged"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("S", "C", "T", "N", "Q", "Y")], Property := "Polar"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("G", "A", "V", "L", "M", "I", "P", "F", "W")], Property := "Nonpolar"]
+InteTime_Sub[, Property2 := Property]
+InteTime_Sub[Property %in% c("Nonpolar", "Polar"), Property2 := "Uncharged"]
+InteTime_Sub[, Property2 := factor(Property2, levels = c("Negatively charged", "Uncharged", "Positively charged"))]
+```
+
+```{r fig.width=3, fig.height=4}
+ggplot(InteTime_Sub, aes(x = Property2, y = Time2 * 1000, colour = Property2)) + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.3)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)") + 
+  scale_colour_brewer(palette = "Set1", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+
+```{r fig.width=3, fig.height=4}
+ggplot(InteTime_Sub[Property2 == "Uncharged"], aes(x = Property, y = Time2 * 1000, colour = Property)) + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.3)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)") + 
+  scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+
+
+
+
+
+
+
+
+
+

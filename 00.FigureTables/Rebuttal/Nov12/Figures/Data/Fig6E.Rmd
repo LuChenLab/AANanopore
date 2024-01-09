@@ -1,0 +1,58 @@
+---
+title: "Figure 6 e"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+LSGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LSGV_prediction.txt", sep = "\t")
+LFGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LFGV_prediction.txt", sep = "\t")
+```
+
+```{r}
+openxlsx::write.xlsx(list(LFGV, LSGV), "./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6E.xlsx", overwrite = T)
+```
+

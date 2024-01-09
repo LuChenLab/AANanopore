@@ -1,0 +1,100 @@
+---
+title: "Figure 1 F"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig1F.xlsx", 1))
+AABlockade <- as.data.table(openxlsx::read.xlsx("analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig1F.xlsx", 2))
+data[, AminoAcid := factor(AminoAcid, levels = c("His1", "His2", "Lys", "Arg", "Glu", "Asp", "Gly", "Ala", "Val", "Leu", "Met", "Ile", "Pro", "Phe", "Trp", "Cys", "Ser", "Tyr", "Asn", "Gln", "Thr"))]
+AABlockade[, AminoAcid := factor(AminoAcid, levels = c("His1", "His2", "Lys", "Arg", "Glu", "Asp", "Gly", "Ala", "Val", "Leu", "Met", "Ile", "Pro", "Phe", "Trp", "Cys", "Ser", "Tyr", "Asn", "Gln", "Thr"))]
+```
+
+```{r fig.width=15, fig.height=3}
+ggplot(data, aes(x = Time, y = Current)) + 
+  geom_step() + 
+  geom_hline(data = AABlockade, aes(yintercept = 1 - Blockade), colour = "grey", lty = 2) + 
+  facet_grid(. ~ AminoAcid, scales = "free", space = "free_x") + 
+  theme_void(base_size = 22)
+```
+
+```{r fig.width=15, fig.height=3}
+sx <- data.table(AminoAcid = "His1", x = 0, y = 0.7, xend = 0.005, yend = 0.7)
+AABlockade[, x := 0]
+AABlockade[, y := 0.7]
+AABlockade[, xend := 0.005]
+AABlockade[, yend := 0.7]
+AABlockade[, alpha := as.numeric(AminoAcid == "His1")]
+AABlockade[, Lab := ifelse(AminoAcid == "His1", "5 (ms)", "")]
+```
+
+```{r fig.width=15, fig.height=3}
+ggplot(data, aes(x = Time, y = Current)) + 
+  geom_step() + 
+  geom_hline(data = AABlockade, aes(yintercept = 1 - Blockade), colour = "grey", lty = 2) +
+  geom_segment(data = AABlockade, mapping = aes(x = x, y = y, xend = xend, yend = yend, colour = alpha), size = 1) + 
+  geom_text(data = AABlockade, mapping = aes(x = 0.0025, y = 0.68, label = Lab), size = 4) + 
+  scale_colour_gradient2(low = "white", high = "black") + 
+  facet_grid(. ~ AminoAcid, scales = "free", space = "free_x") + 
+  theme_classic2(base_size = 22) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.background = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        axis.line.x = element_blank())
+ggsave("analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig1F.pdf", width = 15, height = 3)
+```
+
+
+
+
+
+
+
+
+
+
+

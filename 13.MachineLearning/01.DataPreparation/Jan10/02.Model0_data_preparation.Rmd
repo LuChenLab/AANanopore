@@ -1,0 +1,165 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+library(caret)
+```
+
+# Machine Learning Matrix
+
+```{r}
+L1_Files <- list.files("./analysis/12.SignalFiltering/Jan07/Filter2", "_Signal1_Mainly_L1.txt", full.names = TRUE)
+```
+
+```{r}
+L1_Mat <- lapply(L1_Files, fread)
+names(L1_Mat) <- gsub("_Signal1_Mainly_L1.txt", "", basename(L1_Files))
+L1_Mat <- data.table(amino_acid = rep(names(L1_Mat), mapply(nrow, L1_Mat)), do.call(rbind, L1_Mat))
+```
+
+```{r}
+L1_Mat[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+L1_Mat[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+L1_Mat[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+L1_Mat[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+aaBlockade <- lapply(L1_Mat[, unique(aa)], FUN = function(a) {
+  den <- L1_Mat[aa == a, density(Blockade, adjust = 5)]
+  SD <- L1_Mat[aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+L1_Files <- list.files("./analysis/12.SignalFiltering/Jan07/Filter2", "_Signal1_Mainly_L1.txt", full.names = TRUE)
+L1_Mat <- lapply(L1_Files, fread)
+names(L1_Mat) <- gsub("_Signal1_Mainly_L1.txt", "", basename(L1_Files))
+L1_Mat <- data.table(amino_acid = rep(names(L1_Mat), mapply(nrow, L1_Mat)), do.call(rbind, L1_Mat))
+```
+
+```{r}
+L2_Files <- list.files("./analysis/12.SignalFiltering/Jan07/Filter2", "_Signal1_Mainly_L2.txt", full.names = TRUE)
+L2_Mat <- lapply(L2_Files, fread)
+names(L2_Mat) <- gsub("_Signal1_Mainly_L2.txt", "", basename(L2_Files))
+L2_Mat <- data.table(amino_acid = rep(names(L2_Mat), mapply(nrow, L2_Mat)), do.call(rbind, L2_Mat))
+```
+
+```{r}
+L1_Mat <- L1_Mat[L2Ratio < 0.05]
+# L2_Mat <- L2_Mat[L2Ratio <= 0]
+L2_Mat <- rbind(L2_Mat[L2Ratio <= 0], L1_Mat[L2Ratio > 0.1])
+```
+
+```{r}
+Mat <- rbind(L1_Mat, L2_Mat)
+setkey(Mat, file_name, StartTime)
+```
+
+```{r}
+AA_Sig <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Feature_Matrix_of_AA_Signal.Rds")
+```
+
+```{r}
+AA_Sig_Main_L1 <- AA_Sig[ID %in% L1_Mat[, ID]]
+AA_Sig_Main_L2 <- AA_Sig[!ID %in% L1_Mat[, ID]]
+```
+
+```{r}
+Blank_Sig <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Feature_Matrix_of_Blank_Signal.Rds")
+```
+
+# L1
+
+```{r}
+Vali_Set <- L1_Mat[, .N, .(amino_acid, file_name)][N > 20, .SD[which.min(N)], amino_acid]
+Vali_Set <- merge(Vali_Set[, .(amino_acid, file_name)], L1_Mat[, .(amino_acid, ID, file_name)], by = c("amino_acid", "file_name"))
+
+Valid <- AA_Sig_Main_L1[ID %in% Vali_Set$ID]
+Mat <- AA_Sig_Main_L1[!ID %in% Vali_Set$ID]
+
+set.seed(3456)
+Train <- Mat[, .SD[sample(.N, .N * 0.8), ], amino_acid]
+set.seed(3456)
+Train <- rbind(Train[amino_acid %in% Train[, .N, amino_acid][N >= 1000, amino_acid], .SD[sample(.N, 1000), ], amino_acid], 
+               Train[amino_acid %in% Train[, .N, amino_acid][N < 1000, amino_acid], .SD[sample(.N, 1000, replace = T), ], amino_acid])
+Test <- Mat[!ID %in% Train$ID]
+
+
+set.seed(3456)
+Sig0 <- Blank_Sig[, .SD[sample(.N, 1000), ]]
+Sig0[, amino_acid := "Noise"]
+Sig0 <- Sig0[, .SD[sample(.N, 1000), ], amino_acid]
+
+Train <- rbind(Train, Sig0)
+Train[, ID := NULL]
+Train <- data.frame(Train[, 2:610], Class = factor(Train[[1]], levels = c(sort(Mat[, unique(amino_acid)]), "Noise")))
+
+saveRDS(Train, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Train.Rds")
+saveRDS(Test, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Test.Rds")
+saveRDS(Valid, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Valid.Rds")
+```
+
+# L2
+
+```{r}
+Vali_Set <- L2_Mat[, .N, .(amino_acid, file_name)][N > 10, .SD[which.min(N)], amino_acid]
+Vali_Set <- merge(Vali_Set[, .(amino_acid, file_name)], L2_Mat[, .(amino_acid, ID, file_name)], by = c("amino_acid", "file_name"))
+
+Valid <- AA_Sig_Main_L2[ID %in% Vali_Set$ID]
+Mat <- AA_Sig_Main_L2[!ID %in% Vali_Set$ID]
+
+set.seed(3456)
+Train <- Mat[, .SD[sample(.N, .N * 0.8), ], amino_acid]
+set.seed(3456)
+Train <- rbind(Train[amino_acid %in% Train[, .N, amino_acid][N >= 350, amino_acid], .SD[sample(.N, 350), ], amino_acid], 
+               Train[amino_acid %in% Train[, .N, amino_acid][N < 350, amino_acid], .SD[sample(.N, 350, replace = T), ], amino_acid])
+Test <- Mat[!ID %in% Train$ID]
+
+
+set.seed(3456)
+Sig0 <- Blank_Sig[, .SD[sample(.N, 350), ]]
+Sig0[, amino_acid := "Noise"]
+Sig0 <- Sig0[, .SD[sample(.N, 350), ], amino_acid]
+
+Train <- rbind(Train, Sig0)
+Train[, ID := NULL]
+Train <- data.frame(Train[, 2:610], Class = factor(Train[[1]], levels = c(sort(Mat[, unique(amino_acid)]), "Noise")))
+
+saveRDS(Train, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Train.Rds")
+saveRDS(Test, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Test.Rds")
+saveRDS(Valid, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Valid.Rds")
+```

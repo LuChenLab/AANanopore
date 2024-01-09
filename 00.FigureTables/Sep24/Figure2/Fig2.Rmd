@@ -127,6 +127,11 @@ aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "non
 aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
 ```
 
+```{r}
+fwrite(AA[DwellTime > 0.75 & SignalSD < 3.5, .(file_name, aa, Blockade, Class)], file = "./analysis/00.FigureTables/Oct23/Figure2/Fig2a.txt", sep = "\t", quote = F)
+openxlsx::write.xlsx(AA[DwellTime > 0.75 & SignalSD < 3.5, .(file_name, aa, Class, Blockade)], 
+                     file = "./analysis/00.FigureTables/Oct23/Figure2/Fig2ab.xlsx")
+```
 
 ```{r fig.width=6, fig.height=4}
 ggplot(data = AA[DwellTime > 0.75 & SignalSD < 3.5], 
@@ -196,6 +201,11 @@ AA_N <- readRDS("./analysis/00.FigureTables/Jun23/Figure2/AA_velocity.Rds")
 AA_N[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
 ```
 
+```{r}
+openxlsx::write.xlsx(AA_N[, .(file_name, aa, Class, frequency = N3)], 
+                     file = "./analysis/00.FigureTables/Oct23/Figure2/Fig2c.xlsx")
+```
+
 ```{r fig.height=5, fig.width=10}
 ggplot(AA_N, aes(x = aa, y = N3, colour = Class)) + 
   geom_boxplot() + 
@@ -219,6 +229,12 @@ AAInfo[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
 ```
 
 ```{r}
+openxlsx::write.xlsx(AAInfo[DwellTime > 0.75 & SignalSD < 3.5, .(file_name, aa, Class, Blockade, DwellTime)], 
+                     file = "./analysis/00.FigureTables/Oct23/Figure2/Fig2abd.xlsx")
+```
+
+
+```{r}
 ggplot(AAInfo[DwellTime > 0.75 & SignalSD < 3.5], aes(x = aa, y = DwellTime, colour = Class)) + 
   geom_violin() +
   stat_summary(fun.data = "mean_sd") + 
@@ -233,6 +249,25 @@ ggplot(AAInfo[DwellTime > 0.75 & SignalSD < 3.5], aes(x = aa, y = DwellTime, col
 p_e
 ```
 
+```{r}
+AA[, aa := factor(aa, levels = levels(AAInfo[, aa]))]
+AA[, Class := factor(Class, levels = levels(AAInfo[, Class]))]
+ggplot(AA[DwellTime > 0.75 & SignalSD < 3.5], aes(x = aa, y = DwellTime, colour = Class)) + 
+  geom_violin() +
+  stat_summary(fun.data = "mean_sd") + 
+  theme_bw(base_size = 15) + 
+  scale_y_log10() + 
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Amino acid", y = "Dwell time (ms)") + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(),
+        panel.grid = element_blank(), 
+        legend.title = element_blank()) 
+```
+
+
+
+
 # f
 
 ```{r}
@@ -240,6 +275,11 @@ AA_N2 <- AA_N[, mean(N3), by = c("Class", "aa")]
 my_comp <- list(c("charged", "polar"), c("charged", "nonpolar"), c("polar", "nonpolar"))
 AA_N2[aa %in% c("H", "K", "R"), Group := "Positive"]
 AA_N2[aa %in% c("E", "D"), Group := "Negative"]
+```
+
+```{r}
+openxlsx::write.xlsx(AAInfo[DwellTime > 0.75 & SignalSD < 3.5, .(file_name, aa, Class, DwellTime)], 
+                     file = "./analysis/00.FigureTables/Oct23/Figure2/Fig2d.xlsx")
 ```
 
 ```{r}

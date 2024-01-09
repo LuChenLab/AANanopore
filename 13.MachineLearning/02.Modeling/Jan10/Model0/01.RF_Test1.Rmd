@@ -1,0 +1,146 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(data.table)
+library(Biostrings)
+library(ggplot2)
+library(parallel)
+library(caret)
+```
+
+```{r}
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10)
+
+library(doParallel)
+cl <- makePSOCKcluster(10)
+registerDoParallel(cl)
+```
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Train.Rds")
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1.Rds")
+rm(list = c("Train", "RFC"))
+```
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Train.Rds")
+Train <- subset(Train, select = !colnames(Train) %in% paste0("X", sprintf("%03d", 1:500)))
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1_P.Rds")
+rm(list = c("Train", "RFC"))
+```
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Train.Rds")
+Train <- subset(Train, select = !colnames(Train) %in% paste0("P", sprintf("%03d", 1:100)))
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1_X.Rds")
+rm(list = c("Train", "RFC"))
+```
+
+
+# L2
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Train.Rds")
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2.Rds")
+rm(list = c("Train", "RFC"))
+```
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Train.Rds")
+Train <- subset(Train, select = !colnames(Train) %in% paste0("X", sprintf("%03d", 1:500)))
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2_P.Rds")
+rm(list = c("Train", "RFC"))
+```
+
+```{r}
+Train <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Train.Rds")
+Train <- subset(Train, select = !colnames(Train) %in% paste0("P", sprintf("%03d", 1:100)))
+set.seed(825)
+RFC <- train(Class ~ ., data = Train, 
+             # preProc = c("center", "scale", "YeoJohnson", "nzv"), 
+             method = "rf", 
+             trControl = fitControl,
+             verbose = FALSE,
+             ## to evaluate:
+             tuneGrid = expand.grid(mtry = 30),
+             # tuneLength = 50,
+             metric = "Accuracy", 
+             allowParallel = TRUE)
+saveRDS(RFC, file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2_X.Rds")
+rm(list = c("Train", "RFC"))
+```
+

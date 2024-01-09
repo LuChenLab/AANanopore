@@ -1,0 +1,380 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, file_name := as.character(file_name)]
+meta[, file_id := as.character(file_id)]
+meta <- meta[amino_acid == "Ser" & concentration > 0]
+```
+
+```{r fig.width=10, fig.height=4}
+i <- 3
+sig0 <- fread(paste0("./analysis/81.ABFProcessing/RawSignal/RawSignal_", meta[i, file_name], ".txt"))
+sig1 <- fread(paste0("./analysis/81.ABFProcessing/SelectedL0/", meta[i, file_id], ".MainL0.txt"))
+hist(sig0[BaseMean > 90, BaseMean], breaks = 200)
+abline(v = sig1[, range(BaseMean)], col = 2)
+```
+
+```{r}
+ggplot(sig0[Blockade > 0], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10()
+```
+
+```{r}
+ggplot(sig1[Blockade > 0], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, file_name := as.character(file_name)]
+meta[, file_id := as.character(file_id)]
+meta <- meta[amino_acid == "Ala" & concentration > 0]
+```
+
+```{r fig.width=10, fig.height=4}
+i <- 8
+sig0 <- fread(paste0("./analysis/81.ABFProcessing/RawSignal/RawSignal_", meta[i, file_name], ".txt"))
+sig1 <- fread(paste0("./analysis/81.ABFProcessing/SelectedL0/", meta[i, file_id], ".MainL0.txt"))
+sig2 <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/Ala.signal.txt"))
+sig2 <- sig2[file_id %in% sig1[, unique(A)]]
+hist(sig0[BaseMean > 90, BaseMean], breaks = 200)
+abline(v = sig1[, range(BaseMean)], col = 2)
+```
+
+```{r}
+ggplot(sig0[Blockade > 0], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10()
+```
+
+```{r}
+ggplot(sig1[Blockade > 0], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10()
+```
+
+```{r}
+abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", meta[i, file_name], ".Rds"))
+```
+
+```{r}
+hist(abf[pA > -100 & pA < 150 & round(mV) == 50, pA], breaks = 200)
+```
+
+```{r}
+hist(abf[pA > 90 & pA < 130 & round(mV) == 50, pA], breaks = 200)
+```
+
+```{r}
+sigplot <- function(abf, sig, id, flank = NULL, plot = TRUE) {
+  if(is.null(flank)) {
+    i <- abf[Time > sig[ID == id, StartTime] - 1e-5 * sig[ID == id, LeftLength] & Time < sig[ID == id, EndTime] + 1e-5 * sig[ID == id, RightLength]]
+  } else {
+    if(length(flank) == 1) flank <- c(flank, flank)
+    i <- abf[Time > sig[ID == id, StartTime] - flank[1] & Time < sig[ID == id, EndTime] + flank[2]]
+  }
+  ggplot(i, aes(x = Time, y = pA)) + 
+    geom_step(aes(y = pA)) + 
+    geom_step(aes(y = Sm), colour = "red") -> p
+  if(plot) {
+    p
+  } else {
+    i
+  }
+}
+```
+
+```{r}
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2, ID][1])
+```
+
+```{r}
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2, ID][1], flank = 0.1)
+```
+
+
+
+
+```{r}
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2 & State == "Mixtrue", ID][1])
+```
+
+```{r fig.width=20, fig.height=3}
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2 & State == "Mixtrue", ID][13], flank = c(0.001, 0.2))
+```
+
+```{r fig.width=20, fig.height=3}
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2 & State == "Mixtrue", ID][10], flank = c(0.2, 0.2))
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2 & State == "Mixtrue", ID][13], flank = c(0.2, 0.2))
+sigplot(abf, sig = sig2, id = sig2[DwellTime > 2 & State == "Mixtrue", ID][19], flank = c(0.04, 0.12))
+```
+
+
+```{r}
+sigplot(abf, sig = sig0, id = "21502002_3495")
+sigplot(abf, sig = sig0, id = "21502002_3497", flank = c(1e-5*771, 1e-5*107))
+sigplot(abf, sig = sig0, id = "21502002_3498", flank = c(1e-5*424, 1e-5*611))
+```
+
+
+```{r fig.width=20, fig.height=3}
+ggplot(data = abf[Time >= 950.9124 & Time <= 951.0668], aes(x = Time)) + 
+  geom_step(aes(y = pA)) + 
+  geom_step(aes(y = Sm), colour = "red")
+```
+
+```{r}
+sig_s <- abf[Time >= 950.9024 & Time <= 951.0768]
+sig_1 <- sigplot(abf, sig = sig0, id = "21502002_3495", plot = FALSE)
+sig_2 <- sigplot(abf, sig = sig0, id = "21502002_3497", flank = c(1e-5*771, 1e-5*107), plot = FALSE)
+sig_3 <- sigplot(abf, sig = sig0, id = "21502002_3498", flank = c(1e-5*424, 1e-5*611), plot = FALSE)
+```
+
+```{r}
+sig_1[Sm %in% head(runValue(Rle(Sm)), 1), State := "B1"]
+sig_1[Sm %in% tail(runValue(Rle(Sm)), 1), State := "B2"]
+sig_1[is.na(State), State := "S"]
+
+sig_2[Sm %in% head(runValue(Rle(Sm)), 1), State := "B1"]
+sig_2[Sm %in% tail(runValue(Rle(Sm)), 1), State := "B2"]
+sig_2[is.na(State), State := "S"]
+
+sig_3[Sm %in% head(runValue(Rle(Sm)), 1), State := "B1"]
+sig_3[Sm %in% tail(runValue(Rle(Sm)), 1), State := "B2"]
+sig_3[is.na(State), State := "S"]
+```
+
+```{r}
+ggplot() + 
+  geom_line(data = sig_1, aes(x = Time, y = pA)) + 
+  geom_line(data = sig_1[State == "S"], aes(x = Time, y = pA), colour = "red")
+ggplot() + 
+  geom_line(data = sig_2, aes(x = Time, y = pA)) + 
+  geom_line(data = sig_2[State == "S"], aes(x = Time, y = pA), colour = "red")
+ggplot() + 
+  geom_line(data = sig_3, aes(x = Time, y = pA)) + 
+  geom_line(data = sig_3[State == "S"], aes(x = Time, y = pA), colour = "red")
+```
+
+
+```{r fig.width=20, fig.height=3}
+ggplot() + 
+  geom_step(data = sig_s, aes(x = Time, y = pA)) + 
+  geom_step(data = sig_s, aes(x = Time, y = Sm), colour = "red") + 
+  scale_x_continuous(expand = c(0, 0)) + 
+  labs(y = "Current (pA)") + 
+  ggthemes::theme_stata(base_size = 15) + 
+  theme(panel.background = element_blank(), plot.background = element_blank()) + 
+  geom_rect(data = sig_1[, .(xmin = min(Time), xmax = max(Time), ymin = sig_s[, min(pA)], ymax = sig_s[, max(pA)])], aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), alpha = 0.5) + 
+  geom_rect(data = sig_2[, .(xmin = min(Time), xmax = max(Time), ymin = sig_s[, min(pA)], ymax = sig_s[, max(pA)])], aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), alpha = 0.5) + 
+  geom_rect(data = sig_3[, .(xmin = min(Time), xmax = max(Time), ymin = sig_s[, min(pA)], ymax = sig_s[, max(pA)])], aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), alpha = 0.5) + 
+  geom_text(aes(x = sig_1[State == "S", mean(range(Time))], y = sig_s[, max(pA)] * 1.05, label = "sig1"), size = 5) + 
+  geom_text(aes(x = sig_2[State == "S", mean(range(Time))], y = sig_s[, max(pA)] * 1.05, label = "sig2"), size = 5) + 
+  geom_text(aes(x = sig_3[State == "S", mean(range(Time))], y = sig_s[, max(pA)] * 1.05, label = "sig3"), size = 5) -> p0
+p0
+```
+
+```{r}
+library(ggExtra)
+sig_1[, State2 := substr(State, 1, 1)]
+ggplot() + 
+  geom_line(data = sig_1, aes(x = Time, y = pA)) + 
+  geom_line(data = sig_1[State == "S"], aes(x = Time, y = pA), colour = "red") + 
+  geom_segment(aes(x = sig_1[State == "S", min(Time)], y = 100, xend = sig_1[State == "S", max(Time)], yend = 100), arrow = arrow(length = unit(0.03, "npc"))) + 
+  geom_segment(aes(x = sig_1[State == "S", max(Time)], y = 100, xend = sig_1[State == "S", min(Time)], yend = 100), arrow = arrow(length = unit(0.03, "npc"))) + 
+  geom_text(aes(x = sig_1[State == "S", mean(range(Time))], y = 103, label = "Δt")) + 
+  scale_x_continuous(n.breaks = 4) + 
+  labs(y = "Current (pA)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(1, 0.25, 1, 1), "line")) -> p1
+
+sig_1_peak <- sig_1[, .(x = with(density(pA, bw = 1), x[which.max(y)]), y = with(density(pA, bw = .5), max(y))), State2]
+sig_1_peak[, State2 := plyr::mapvalues(State2, c("B", "S"), c("Baseline\ncurrent", "Signal\ncurrent"))]
+ggplot() + 
+  geom_line(data = sig_1, aes(pA, colour = State2), stat = "density", bw = .5, size = 1) +
+  scale_colour_manual(values = c("black", "red")) + 
+  scale_y_continuous(limits = c(0, sig_1_peak[, max(y) * 2.5]), expand = c(0, 0)) + 
+  scale_x_continuous(breaks = sig_1_peak[, x], labels = c(expression('l'[0]*''), expression('l'[1]*''))) + 
+  geom_text_repel(data = sig_1_peak, aes(x = x, y = y, label = State2), angle = 0, size = 4.5, min.segment.length = 0, nudge_y = 1) + 
+  geom_hline(yintercept = sig_1_peak[, y], linetype = 2, colour = "grey") + 
+  coord_flip() + 
+  theme_minimal(base_size = 20) +
+  theme(legend.position = "none", 
+        axis.title = element_blank(), 
+        axis.text.x = element_blank(), 
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        plot.margin = unit(c(1, 1, 1, 0), "line")) -> p2
+p1 + p2 + plot_layout(nrow = 1, widths = c(3, 1))
+```
+
+
+```{r fig.width=4, fig.height=4}
+ggplot(sig_1[State2 == "S"], aes(x = Time, y = pA / sig_1_peak[grepl("Baseline", State2), x])) + 
+  geom_step(colour = "red") + 
+  scale_y_continuous(limits = c(0, 1)) + 
+  scale_x_continuous(n.breaks = 2) + 
+  labs(x = "Time", y = "Normalized current") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 0, 1, 1), "line")) -> p3
+
+sig_1_den <- sig_1[State2 == "S", density(pA / sig_1_peak[grepl("Baseline", State2), x], n = 1000, from = 0, to = 1, adjust = 0.4)]
+sig_1_den <- with(sig_1_den, data.table(x, y))
+ggplot(data = sig_1_den, aes(x, y, colour = y)) + 
+  geom_point(size = .2) +
+  scale_x_continuous(limits = c(0, 1), 
+                     sec.axis = dup_axis(breaks = c(0, 0.5, 1), labels = c("X0001", "......", "X1000"))) + 
+  scale_colour_gradient(low = "#FFF5F0", high = "red") + 
+  labs(y = "Density") + 
+  ggthemes::theme_calc(base_size = 15) +
+  theme(plot.background = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.line = element_blank(), 
+        axis.title.y = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "none") + 
+  coord_flip() -> p4
+
+p3 + p4 + plot_layout(nrow = 1, widths = c(2, 2))
+```
+
+```{r fig.width=10, fig.height=4}
+p0
+p1 + p2 + p3 + p4 + plot_layout(nrow = 1, widths = c(2, 1, 1, 1))
+```
+
+
+```{r}
+sig0$D <- sig0[, get_density(x = Blockade, y = log10(DwellTime))]
+sig1$D <- sig1[, get_density(x = Blockade, y = log10(DwellTime))]
+```
+
+```{r}
+ggplot(data = sig0[Blockade > 0][order(D)], mapping = aes(x = Blockade, y = DwellTime, colour = D)) + 
+  geom_point(aes(alpha = D), size = .5) + 
+  scale_y_log10() + 
+  scale_colour_gradient(low = "grey", high = "black") + 
+  labs(x = expression('Blockade (1 - l'[1]*'/l'[0]*')'), y = "Dwell time / Δt (ms)", subtitle = paste0("N = ", sig0[Blockade > 0, .N])) + 
+  theme_light(base_size = 15) +
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p5
+```
+
+```{r}
+ggplot(data = sig1[order(D)], mapping = aes(x = Blockade, y = DwellTime, colour = D)) + 
+  geom_point(aes(alpha = D), size = .5) + 
+  scale_y_log10() + 
+  scale_colour_gradient(low = "grey", high = "black") + 
+  labs(x = expression('Blockade (1 - l'[1]*'/l'[0]*')'), y = "Dwell time / Δt (ms)", subtitle = paste0("N = ", sig1[Blockade > 0, .N])) + 
+  theme_light(base_size = 15) +
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p7
+```
+
+
+```{r}
+ggplot(sig0[BaseMean > 100 & BaseMean < 125, ], aes(BaseMean)) + 
+  geom_histogram(binwidth = .1) + 
+  geom_rect(aes(xmin = sig1[, min(BaseMean)], xmax = sig1[, max(BaseMean)], ymin = 0, ymax = 400), fill = "red", alpha = 0.002) + 
+  labs(y = "Count", x = "Baseline current (pA)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        panel.grid = element_blank()) -> p6
+```
+
+```{r fig.width=12, fig.height=4}
+p0
+p5 + p6 + p7 + plot_layout(nrow = 1, widths = c(1, 1, 1))
+```
+
+```{r fig.height=4, fig.width=10, echo=FALSE}
+p_m <- cowplot::plot_grid(p1, p2, p3, p4, nrow = 1, labels = c("b", "", "c", ""), rel_widths = c(2, 1, 1, 1.15), align = "h", label_size = 20, label_y = 1.05)
+p_d <- cowplot::plot_grid(p5, p6, p7, nrow = 1, labels = c("d", "e", "f"), rel_widths = c(1, 1, 1), align = "h", label_size = 20, label_y = 1.05)
+```
+
+```{r fig.height=8, fig.width=10, echo=FALSE}
+cowplot::plot_grid(p0, p_m, p_d, ncol = 1, labels = c("a", ""), rel_heights = c(1.1, 1.5, 1.7), label_size = 20, label_y = 1.05)
+# ggsave("./analysis/00.FigureTables/Rebuttal/NatureMethods/SupFig1.pdf", width = 10, height = 8)
+```
+
+
+```{r fig.height=8, fig.width=10, echo=FALSE}
+cairo_pdf("./analysis/00.FigureTables/Rebuttal/NatureMethods/SupFig1.pdf", width = 10, height = 8)
+cowplot::plot_grid(p0, p_m, p_d, ncol = 1, labels = c("a", ""), rel_heights = c(1.1, 1.5, 1.7), label_size = 20, label_y = 1.05)
+dev.off()
+```
+

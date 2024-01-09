@@ -1,0 +1,74 @@
+---
+title: "Supplementary Figure 16"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+FHL <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FHL.txt", sep = "\t")
+FYSL <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FYSL.txt", sep = "\t")
+LEF <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LEF.txt", sep = "\t")
+LVFAG <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAG.txt", sep = "\t")
+LVFA <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFA.txt", sep = "\t")
+LVFAK <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAK.txt", sep = "\t")
+```
+
+```{r}
+polyp <- rbind(data.table(PPT = "LVFFAG", LVFAG), 
+               data.table(PPT = "LVFFAK", LVFAK), 
+               data.table(PPT = "LVFFA", LVFA), 
+               data.table(PPT = "FHL", FHL), 
+               data.table(PPT = "FYSL", FYSL), 
+               data.table(PPT = "LEF", LEF))
+polyp <- split(polyp, polyp$PPT)
+polyp <- lapply(polyp, function(x) {
+  data.table(x, x[, get_density(Blockade, log10(DwellTime))])
+})
+polyp <- do.call(rbind, polyp)
+```
+
+```{r}
+polyp <- polyp[, .(Polypeptide = PPT, Blockade, DwellTime, AminoAcid = Pred2, Density = V2)]
+polyp[, AminoAcid := plyr::mapvalues(AminoAcid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+openxlsx::write.xlsx(polyp[Blockade < 0.3], "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig16.xlsx", overwrite = T)
+```

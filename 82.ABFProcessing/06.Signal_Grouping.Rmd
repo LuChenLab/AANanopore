@@ -1,0 +1,2337 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+getwd()
+```
+
+# His
+
+```{r fig.width=24, fig.height=6}
+aat <- "His"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r fig.width=12, fig.height=8}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- kmeans(subtab, 10)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  # scale_colour_brewer(palette = "Set2", direction = -1) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ cluster, nrow = 2)
+```
+
+```{r fig.height=3.5, fig.width=9}
+ggplot(data = merge(dataset, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster %in% c(2, 3, 7, 10)), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r fig.height=3.5, fig.width=9}
+ggplot(data = merge(dataset, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster %in% c(2, 3, 7, 10)), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ cluster %in% c(2, 3, 7, 10))
+```
+
+```{r}
+cl_summ <- merge(dataset1, cl, by = "ID")[, .(DwellTime = mean(DwellTime), Blockade = mean(Blockade)), cluster]
+c1 <- c(2, 3, 7, 10)
+sigs1 <- cl[cluster %in% c1, ID]
+sigs2 <- cl[!cluster %in% c1, ID]
+```
+
+```{r}
+ggplot(data = dataset[ID %in% sigs1], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+ggplot(data = dataset[ID %in% sigs2], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+
+```{r}
+dataset_His1 <- dataset[ID %in% sigs1]
+dataset_His2 <- dataset[ID %in% sigs2]
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset_His1[, ID])
+cl <- kmeans(subtab, 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset_His1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, "1.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+
+
+
+
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset_His2[, ID])
+cl <- kmeans(subtab, 3, nstart = 10)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset_His2, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") + 
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(), 
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(), 
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl <- merge(cl, dataset1[, .(ID, Blockade)])
+cl[, State := ifelse(cluster %in% c(3) & Blockade < 0.4, "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, "2.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .(ID, State)], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = State)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(State ~ ., scales = "free_y", space = "free") + 
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(), 
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(), 
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+
+
+
+
+
+
+# Lys
+
+```{r fig.width=24, fig.height=6}
+aat <- "Lys"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Cys
+
+```{r fig.width=24, fig.height=6}
+aat <- "Cys"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- kmeans(subtab, 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl <- merge(cl, dataset1[, .(ID, Blockade)])
+cl[, State := ifelse(cluster %in% c(2) & Blockade < 0.25, "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Ala
+
+```{r fig.width=24, fig.height=6}
+aat <- "Ala"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- kmeans(subtab, 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Arg
+
+```{r fig.width=24, fig.height=6}
+aat <- "Arg"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- kmeans(subtab, 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Asn
+
+```{r fig.width=24, fig.height=6}
+aat <- "Asn"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- kmeans(subtab, 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Asp
+
+```{r fig.width=24, fig.height=6}
+aat <- "Asp"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Gln
+
+```{r fig.width=24, fig.height=6}
+aat <- "Gln"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Glu
+
+```{r fig.width=24, fig.height=6}
+aat <- "Glu"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Gly
+
+```{r fig.width=24, fig.height=6}
+aat <- "Gly"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Ile
+
+```{r fig.width=24, fig.height=6}
+aat <- "Ile"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Leu
+
+```{r fig.width=24, fig.height=6}
+aat <- "Leu"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Met
+
+```{r fig.width=24, fig.height=6}
+aat <- "Met"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Phe
+
+```{r fig.width=24, fig.height=6}
+aat <- "Phe"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Pro
+
+```{r fig.width=24, fig.height=6}
+aat <- "Pro"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Ser
+
+```{r fig.width=24, fig.height=6}
+aat <- "Ser"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 4), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Thr
+
+```{r fig.width=24, fig.height=6}
+aat <- "Thr"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Trp
+
+```{r fig.width=24, fig.height=6}
+aat <- "Trp"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 4), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Tyr
+
+```{r fig.width=24, fig.height=6}
+aat <- "Tyr"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Val
+
+```{r fig.width=24, fig.height=6}
+aat <- "Val"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# CbC
+
+```{r fig.width=24, fig.height=6}
+aat <- "CbC"
+bgsignal <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+
+dataset <- fread(paste0("./analysis/82.ABFProcessing/SelectedSignals/", aat, "_signal.txt"))
+dataset[, file_id := as.character(file_id)]
+dataset[, File := gsub("\\.[0-9]", "", file_id)]
+dataset[, ID := paste0(aat, "_", ID)]
+
+FeatureMatrix <- paste0("./analysis/82.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(dataset$File), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(FeatureMatrix, fread))
+FeatureMatrix[, ID := paste0(aat, "_", ID)]
+FeatureMatrix <- FeatureMatrix[ID %in% dataset[, ID]]
+FeatureMatrix[, AA := aat]
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[dataset$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+
+SignalCurrent <- mapply(function(x) list.files("./analysis/82.ABFProcessing/SignalCurrent", x, recursive = T, full.names = T), unique(dataset$File))
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+```
+
+```{r}
+dataset1 <- readRDS(paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/02.SelectedSignals/", aat, ".signal.remove.outliers18_1.Rds"))
+```
+
+```{r}
+ggplot(data = dataset1, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=10, fig.height=3}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% dataset1[, ID])
+cl <- stats::kmeans(subtab[, !is.infinite(colSums(subtab))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(dataset1, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = File), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl[, .SD[sample(.N, 50)], cluster], by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(dataset1, cl[, .(ID, State)], by = "ID")
+ggplot(merge(SignalCurrent, dataset2[, .(ID = gsub(paste0(aat, "_"), "", ID), State)], by = "ID"), aes(x = Current, colour = State)) + 
+  geom_line(stat = "density", adjust = 2)
+fwrite(dataset2, paste0("analysis/82.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, ".signal.txt"), sep = "\t", quote = FALSE)
+```
+

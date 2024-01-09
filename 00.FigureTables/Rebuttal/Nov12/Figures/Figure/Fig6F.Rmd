@@ -1,0 +1,89 @@
+---
+title: "Figure 6 E"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+abf_j <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 1))
+aasumm2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 2))
+si <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 3))
+abf_i <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 4))
+aasumm1 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 5))
+PreSig <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6F.xlsx", 6))
+```
+
+
+```{r fig.width=7, fig.height=3}
+L0_2 <- 116.6835
+ggplot() + 
+  geom_rect(data = aasumm2, aes(xmin = abf_j[, min(Time)], xmax = abf_j[, max(Time)], ymin = ymin / L0_2, ymax = ymax / L0_2, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_j, mapping = aes(x = Time, y = pA / L0_2), size = 0.1) + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0_2 - 0.1, label = Pred2), direction = "y", size = 6) +
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm2[, y / L0_2], labels = aasumm2[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(1282.65, 1282.65 + 0.1), labels = c(0, 0.1)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Standardized current") + 
+  theme_light(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p6
+p6
+```
+
+
+```{r fig.width=7, fig.height=3}
+L0 <- 111.9369
+ggplot() + 
+  geom_rect(data = aasumm1, aes(xmin = abf_i[, min(Time)], xmax = abf_i[, max(Time)], ymin = ymin / L0, ymax = ymax / L0, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_i, mapping = aes(x = Time, y = pA / L0), size = 0.1) + 
+  geom_text(data = PreSig, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0 - 0.2, label = Pred2), direction = "y", size = 6) + 
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm1[, y / L0], labels = aasumm1[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(248 - 0.52, 248 - 0.52 + 0.1), labels = c(0, 0.1)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Standardized current") + 
+  theme_light(base_size = 22) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p5
+p5
+```
+
+
+
+```{r}
+p6 <- p6 + theme(axis.title = element_blank()) + labs(tag = "f")
+p5 <- p5 + theme(axis.title.y = element_text(hjust = -.8))
+```
+
+```{r fig.width=9, fig.height=6}
+p6 + p5 + 
+  plot_layout(ncol = 1)
+```

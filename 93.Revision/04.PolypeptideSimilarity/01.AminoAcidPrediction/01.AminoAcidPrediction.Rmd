@@ -1,0 +1,741 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+AABlockade[, A := plyr::mapvalues(AA , AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+
+# LVFAG
+
+```{r}
+LVFAG <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAG_prediction_merge.xlsx"))
+file_id <- LVFAG[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(gsub(".[0-9]$", "", file_id), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFGKLV/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.95], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.95 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAG.txt", sep = "\t")
+```
+
+
+# LVFAK
+
+```{r}
+LVFAK <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAK_prediction_merge.xlsx"))
+file_id <- LVFAK[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFKLV/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.99], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.99 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAK.txt", sep = "\t")
+```
+
+# LVFA
+
+```{r}
+LVFA <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFA_prediction_merge.xlsx"))
+file_id <- LVFA[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFGKLV/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta1 > 0.99 & Delta2 > 0.99 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFA", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta1 > 0.99 & Delta2 > 0.99 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFA.txt", sep = "\t")
+```
+
+
+# LNFAE
+
+```{r}
+meta <- fread("./data/ChenShanchuan/20231228/meta_20231228.txt", sep = "\t")[file_id %in% c("2023_12_28_0003.1", "20231228_0006.1")]
+file_id <- meta[, unique(file_id)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.EAFNL/Model_EAFNL_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAEFLN/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.95 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.95 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LNFAE.txt", sep = "\t")
+```
+
+# EAFNL
+
+```{r}
+meta <- fread("./data/ChenShanchuan/20231229/meta_20231229.txt", sep = "\t")[file_id %in% c("2023_12_29_0005.1", "20231229_0006.1")]
+file_id <- meta[, unique(file_id)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.EAFNL/Model_EAFNL_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAEFLN/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.95 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.95 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/EAFNL.txt", sep = "\t")
+```
+
+# LFGV
+
+```{r}
+LFGV <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6E.xlsx", 1))
+file_id <- LFGV[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFGLSV/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.7 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LFGV", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.7 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LFGV.txt", sep = "\t")
+```
+
+
+# LSGV
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./analysis/89.Neoantigen/02.SignalDistance/meta.xlsx", sheet = 1))
+meta <- meta[amino_acid == "LSGV"]
+```
+
+```{r}
+LSGV <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6E.xlsx", 2))
+file_id <- LSGV[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFGLSV/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.5 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LSGV", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.5 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LSGV.txt", sep = "\t")
+```
+
+# FHL
+
+```{r}
+FHL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FHL_prediction.txt", sep = "\t")
+file_id <- FHL[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.EFHLSY/Model_EFHLSY_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFHL/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.7 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+sig3 <- sig2[Pred1 != "Noise" & Delta2 > 0.5 & DwellTime > 0.35]
+```
+
+```{r}
+model3 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/His/RF_model.Rds")
+pred3 <- data.table(ID = FM0$ID, 
+                    Pred3 = as.character(predict(model3, FM0)), 
+                    Prob3 = apply(predict(model3, FM0, type = "prob"), 1, max), 
+                    Delta3 = apply(predict(model3, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+sig3 <- merge(sig3, pred3[, .(ID, Pred3)], by = "ID")
+sig3[Pred2 == "His", Pred2 := Pred3]
+sig3[, Pred3 := NULL]
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig3[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig3, aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FHL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig3[, unique(Pred2)]]), values = aa_cols[sig3[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig3, "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FHL.txt", sep = "\t")
+```
+
+# FYSL
+
+```{r}
+FYSL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FYSL_prediction.txt", sep = "\t")
+file_id <- FYSL[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFLSY/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Pred1 != "Noise" & Delta2 > 0.7 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Pred1 != "Noise" & Delta2 > 0.7 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FYSL.txt", sep = "\t")
+```
+
+
+# LEF
+
+```{r}
+LEF <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/LEF_prediction.txt", sep = "\t")
+file_id <- LEF[, unique(A)]
+MainL0 <- mapply(file_id, FUN = function(x) list.files("./analysis", pattern = paste0(x, ".MainL0.txt"), full.names = T, recursive = T))
+MainL0 <- do.call(rbind, lapply(MainL0, fread))
+FM0 <- do.call(rbind, lapply(unique(gsub(".[0-9]$", "", file_id)), FUN = function(x) fread(list.files("./analysis/81.ABFProcessing/FeatureMatrix", pattern = x, full.names = T, recursive = T))))
+stopifnot(all(MainL0$ID %in% FM0$ID))
+FM0 <- FM0[ID %in% MainL0$ID]
+model1 <- readRDS("./analysis/91.RealTimeHydrolysis/00.Models/01.AFGKLSV/Model_AFGKLSV_Noise.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelEFL/RFmodel.Rds")
+pred1 <- data.table(ID = FM0$ID, 
+                    Pred1 = as.character(predict(model1, FM0)), 
+                    Prob1 = apply(predict(model1, FM0, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+pred2 <- data.table(ID = FM0$ID, 
+                    Pred2 = as.character(predict(model2, FM0)), 
+                    Prob2 = apply(predict(model2, FM0, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, FM0, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+sig2 <- merge(MainL0, merge(pred1, pred2, by = "ID"), by = "ID")
+```
+
+```{r fig.width=10, fig.height=4}
+ggplot(sig2[DwellTime < 100], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "a") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p1
+
+ggplot(sig2[Prob2 > 0.95 & DwellTime > 0.35], aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LEF", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred2)]]), values = aa_cols[sig2[, unique(Pred2)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank()) -> p2
+p1 + p2
+```
+
+```{r}
+fwrite(sig2[Prob2 > 0.95 & DwellTime > 0.35], "./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LEF.txt", sep = "\t")
+```
+

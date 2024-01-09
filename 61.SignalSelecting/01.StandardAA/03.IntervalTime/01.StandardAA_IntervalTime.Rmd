@@ -1,0 +1,189 @@
+---
+title: "Signal statistic"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(IRanges)
+library(parallel)
+library(S4Vectors)
+library(data.table)
+```
+
+```{r}
+files <- list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T)
+files <- grep("His", files, value = T, invert = T)
+files <- grep("CbC", files, value = T, invert = T)
+
+for(fi in files) {
+  aat <- gsub("_State_Signals_V2.Rds", "", basename(fi))
+  print(aat)
+  sig <- readRDS(fi)[[1]]
+  sig <- split(sig, sig$File)
+  SigInterTime <- lapply(sig, function(sigi) {
+    setkey(sigi, StartTime)
+    InterTime <- data.table(File = sigi[, unique(File)], 
+                            StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                            EndTime = sigi[, StartTime][-c(1)], 
+                            SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                            SigAfter = sigi[, ID][-c(1)], 
+                            SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                            SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+    
+    filei <- sigi[, unique(File)]
+    abf <- readRDS(paste0("./analysis/21.ABFProcessing/01.StandardAA/ABF/ABF_", filei, ".Rds"))
+    L0 <- fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", sigi[, unique(A)], "/RawSignal_", filei, ".MainL0.txt"))
+    ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+    abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+    
+    ValidRegion <- IRanges(Rle(abf[, Valid]))
+    Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+    InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+    InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+      abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+    }, mc.cores = 10)
+    InterTime2 <- do.call(rbind, InterTime2)
+    InterTime <- cbind(InterTime, InterTime2)
+    return(InterTime)
+  })
+  SigInterTime <- do.call(rbind, SigInterTime)
+  fwrite(SigInterTime, paste0("./analysis/61.SignalSelecting/01.StandardAA/03.IntervalTime/", aat, "_IntervalTime.txt"), sep = "\t", quote = F, row.names = F)
+}
+```
+
+His1
+
+```{r}
+files <- list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T)
+files <- grep("His", files, value = T, invert = F)
+
+aat <- gsub("_State_Signals_V2.Rds", "", basename(files[1]))
+print(aat)
+sig <- readRDS(files[1])[[1]]
+sig <- split(sig, sig$File)
+SigInterTime <- lapply(sig, function(sigi) {
+  setkey(sigi, StartTime)
+  InterTime <- data.table(File = sigi[, unique(File)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(File)]
+  abf <- readRDS(paste0("./analysis/21.ABFProcessing/01.StandardAA/ABF/ABF_", filei, ".Rds"))
+  L0 <- fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", sigi[, unique(A)], "/RawSignal_", filei, ".MainL0.txt"))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, Valid]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+fwrite(SigInterTime, paste0("./analysis/61.SignalSelecting/01.StandardAA/03.IntervalTime/", aat, "_IntervalTime.txt"), sep = "\t", quote = F, row.names = F)
+```
+
+His2
+
+```{r}
+files <- list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T)
+files <- grep("His", files, value = T, invert = F)
+
+aat <- gsub("_State_Signals_V2.Rds", "", basename(files[2]))
+print(aat)
+sig <- readRDS(files[2])[[1]]
+sig <- split(sig, sig$File)
+SigInterTime <- lapply(sig, function(sigi) {
+  setkey(sigi, StartTime)
+  InterTime <- data.table(File = sigi[, unique(File)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(File)]
+  abf <- readRDS(paste0("./analysis/21.ABFProcessing/01.StandardAA/ABF/ABF_", filei, ".Rds"))
+  L0 <- fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", sigi[, unique(A)], "/RawSignal_", filei, ".MainL0.txt"))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, Valid]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+fwrite(SigInterTime, paste0("./analysis/61.SignalSelecting/01.StandardAA/03.IntervalTime/", aat, "_IntervalTime.txt"), sep = "\t", quote = F, row.names = F)
+```
+
+CbC
+
+```{r}
+files <- list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T)
+files <- grep("CbC", files, value = T, invert = F)
+
+aat <- gsub("_State_Signals_V2.Rds", "", basename(files[1]))
+print(aat)
+sig <- readRDS(files[1])[[1]]
+sig <- split(sig, sig$File)
+SigInterTime <- lapply(sig, function(sigi) {
+  setkey(sigi, StartTime)
+  InterTime <- data.table(File = sigi[, unique(File)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(File)]
+  abf <- readRDS(paste0("./analysis/21.ABFProcessing/03.MixtureAA/ABF/ABF_", filei, ".Rds"))
+  L0 <- fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", sigi[, unique(A)], "/CbC_RawSignal_", filei, ".MainL0.txt"))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, Valid]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+fwrite(SigInterTime, paste0("./analysis/61.SignalSelecting/01.StandardAA/03.IntervalTime/", aat, "_IntervalTime.txt"), sep = "\t", quote = F, row.names = F)
+```

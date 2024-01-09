@@ -1,0 +1,369 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231027AcK/20231027_AcK2.xlsx", sheet = 1))[, 1:7]
+colnames(meta) <- c("file_name", "start_time", "end_time",  "amino_acid", "file_id", "sample", "base_line")
+meta <- meta[grepl("非天然氨基酸AcK", sample)]
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid = base_line, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+meta[, sig_file := paste0("./analysis/90.UnnaturalPTM/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta <- meta[file.exists(sig_file)]
+```
+
+
+```{r}
+AcK <- data.table(AA = "AcK", rbind(fread(file.path("./analysis/90.UnnaturalPTM/03.SelectedSignals/20231027_0017.1_euclidean_distance_knn_selected.signals.txt")), 
+                                    fread(file.path("./analysis/90.UnnaturalPTM/03.SelectedSignals/20231027_0025.1_euclidean_distance_knn_selected.signals.txt"))))
+
+AcKK <- data.table(AA = "AcK + K", rbind(fread(file.path("./analysis/90.UnnaturalPTM/03.SelectedSignals/20231027_0018.1_euclidean_distance_knn_selected.signals.txt")), 
+                                         fread(file.path("./analysis/90.UnnaturalPTM/03.SelectedSignals/20231027_0026.1_euclidean_distance_knn_selected.signals.txt"))))
+Sigs <- rbind(AcK, AcKK)
+```
+
+```{r}
+sig1 <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/Lys.signal.txt"))
+sig1[, AA := "K"]
+setnames(sig1, "file_id", "A")
+Sigs <- rbind(Sigs, sig1, fill = TRUE)
+```
+
+```{r}
+Sigs <- split(Sigs, Sigs$AA)
+Sigs <- lapply(Sigs, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+Sigs <- do.call(rbind, Sigs)
+Sigs[, AA := factor(AA, levels = c("K", "AcK", "AcK + K"))]
+```
+
+
+```{r}
+ggplot(Sigs[AA == "AcK" & SignalCurrentPercent > 80 & Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3))
+```
+
+```{r}
+FIT <- fitdistr(Sigs[AA == "AcK" & SignalCurrentPercent > 80 & Blockade < 0.3, Blockade], "normal")$estimate
+FIT <- data.table(A = "AcK", mean = FIT[1], sd = FIT[2])
+```
+
+```{r}
+ggplot() +
+  geom_histogram(data = Sigs[AA == "AcK" & SignalCurrentPercent > 80 & Blockade < 0.3], aes(Blockade, after_stat(density)), binwidth = 0.001, fill = "grey") + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = FIT[A == "AcK", mean], sd = FIT[A == "AcK", sd]), colour = "red", size = 1.2) +
+  labs(title = "AcK", subtitle = FIT[A == "AcK", paste("Mean =", round(mean, 3), "; SD =", round(sd, 4))]) +
+  ggthemes::theme_base(base_size = 22) + 
+  theme(plot.background = element_blank())
+```
+
+```{r}
+Sigs1 <- Sigs[AA == "AcK" & SignalCurrentPercent > 80 & Blockade < 0.3]
+
+DwellTime <- lapply(Sigs1[, unique(AA)], function(aat) {
+  ls <- levels(cut_interval(Sigs1[AA == aat, DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[AA == aat, DwellTime], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = aat, A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+
+AcK_Summa <- merge(DwellTime, FIT)
+setnames(AcK_Summa, "mean", "BlockadeMean")
+setnames(AcK_Summa, "sd", "BlockadeSD")
+```
+
+
+
+```{r}
+ggplot(Sigs[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_stata() + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        legend.position = "none") -> p1
+p1
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[AA != "AcK + K"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right", scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_stata() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+p2
+```
+
+```{r}
+AcKK <- Sigs[AA == "AcK + K" & Blockade > 0.149 & Blockade < 0.27]
+setnames(AcKK, "A", "file_id")
+AcKK[, A := ifelse(Blockade < 0.2, "K", "AcK")]
+AcKK_N <- AcKK[, .N, .(file_id, A)]
+AcKK_N[, Replicate := plyr::mapvalues(file_id, c("20231027_0018.1", "20231027_0026.1"), c("Rep1", "Rep2"))]
+```
+
+```{r}
+ggplot(AcKK_N, aes(x = Replicate, y = N, fill = A)) + 
+  geom_col(position = position_dodge2()) + 
+  geom_text(aes(y = N, label = N), position = position_nudge(x = c(-0.2, 0.22), y = 0.1), size = 4) + 
+  scale_fill_wsj() + 
+  scale_y_log10() + 
+  labs(y = "Number of signals") + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        legend.title = element_blank(), 
+        axis.title.x = element_blank()) -> p3
+p3
+```
+
+```{r}
+AcKK[, D := NULL]
+AcKK <- split(AcKK, AcKK$A)
+AcKK <- lapply(AcKK, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+AcKK <- do.call(rbind, AcKK)
+```
+
+```{r}
+ggplot(AcKK[sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = file_id)) + 
+  ggforce::geom_mark_ellipse(aes(colour = A, label = A, filter = D > 0.1), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  scale_y_log10(limits = c(0.1, 30), breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.position = "none") -> p4
+p4
+```
+
+```{r fig.height=11, fig.width=12, echo=FALSE}
+design <- "
+  111
+  111
+  224
+  224
+  334
+"
+p1 + p2 + p4 + p3 + 
+  plot_layout(design = design)
+```
+
+```{r}
+abf <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231027_0018.Rds")
+```
+
+```{r}
+AcKK[file_id == "20231027_0018.1", .(K = sum(A == "K"), AcK = sum(A == "AcK")), .(Time = round(StartTime))][order(K, decreasing = T)]
+```
+
+```{r}
+abf_i <- abf[Time > 688 & Time < 689]
+abf_i <- abf[Time > 744.5 & Time < 745]
+abf_i <- abf[round(Time) == 804]
+abf_i <- abf[round(Time) == 891]
+abf_i <- abf[Time > 891.25 & Time < 891.46]
+```
+
+```{r}
+L0 <- MainRidge(x = abf_i[, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+abf_i[, pA := pA / L0]
+```
+
+```{r}
+AcKK_i <- AcKK[file_id == "20231027_0018.1" & StartTime > 891.25 & StartTime < 891.46]
+```
+
+```{r}
+RaeSig <- fread("./analysis/81.ABFProcessing/RawSignal/RawSignal_20231027_0018.txt")
+RaeSig <- RaeSig[StartTime > 891.25 & EndTime < 891.46]
+RaeSig$Lab <- c("", "AcK", "K", "", "AcK", "K")
+```
+
+```{r fig.height=3, fig.width=12, echo=FALSE}
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = RaeSig, aes(x = StartTime + (EndTime - StartTime)/2, y = SignalCurrent/L0 - .2, label = Lab)) + 
+  scale_x_continuous(breaks = c(abf_i[, min(Time)], abf_i[, min(Time)] + 0.1), labels = c(0, 0.1), expand = c(0, 0)) + 
+  scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(y = "Standardized current", x = " Recording time (s)") + 
+  theme_base() + 
+  theme(plot.background = element_blank()) -> p5
+p5
+```
+
+
+```{r fig.height=9, fig.width=12, echo=FALSE}
+design <- "
+  113
+  113
+  223
+  444
+"
+p2 + p4 + p3 + p5 + 
+  plot_layout(design = design)
+```
+
+
+```{r fig.width=6, fig.height=4}
+p3
+ggsave("./analysis/90.UnnaturalPTM/04.PredictedSignalPlot/AcK_N.pdf", width = 6, height = 4)
+```
+
+```{r fig.height=9, fig.width=6, echo=FALSE}
+design <- "
+  1
+  1
+  2
+  3
+"
+p2 + p4 + p5 + 
+  plot_layout(design = design)
+ggsave("./analysis/90.UnnaturalPTM/04.PredictedSignalPlot/AcK.pdf", width = 6, height = 9)
+```
+

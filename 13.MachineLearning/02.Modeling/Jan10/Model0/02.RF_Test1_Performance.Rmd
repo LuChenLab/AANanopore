@@ -1,0 +1,614 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+library(caret)
+```
+
+# L1 
+
+## X + P
+```{r}
+L1 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1.Rds")
+Test <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Test.Rds")
+Valid <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L1_Valid.Rds")
+```
+
+```{r}
+ROC_Test <- predict(L1, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L1 <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L1, Test), Prob = ppm[, Prob])
+```
+
+```{r}
+ROC_Valid <- predict(L1, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L1 <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L1, Valid), Prob = ppm[, Prob])
+```
+
+## X
+
+```{r}
+L1 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1_X.Rds")
+
+ROC_Test <- predict(L1, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L1_X <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L1, Test), Prob = ppm[, Prob])
+
+ROC_Valid <- predict(L1, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L1_X <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L1, Valid), Prob = ppm[, Prob])
+```
+
+## P
+
+```{r}
+L1 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L1_P.Rds")
+
+ROC_Test <- predict(L1, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L1_P <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L1, Test), Prob = ppm[, Prob])
+
+ROC_Valid <- predict(L1, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L1_P <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L1, Valid), Prob = ppm[, Prob])
+```
+
+
+# L2 
+
+## X + P
+```{r}
+L2 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2.Rds")
+Test <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Test.Rds")
+Valid <- readRDS("./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/L2_Valid.Rds")
+```
+
+```{r}
+ROC_Test <- predict(L2, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L2 <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L2, Test), Prob = ppm[, Prob])
+```
+
+```{r}
+ROC_Valid <- predict(L2, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L2 <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L2, Valid), Prob = ppm[, Prob])
+```
+
+## X
+
+```{r}
+L2 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2_X.Rds")
+
+ROC_Test <- predict(L2, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L2_X <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L2, Test), Prob = ppm[, Prob])
+
+ROC_Valid <- predict(L2, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L2_X <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L2, Valid), Prob = ppm[, Prob])
+```
+
+## P
+
+```{r}
+L2 <- readRDS(file = "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Model0/RF/RF_Fit_L2_P.Rds")
+
+ROC_Test <- predict(L2, Test, type = "prob")
+ppm <- melt(as.data.table(ROC_Test, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Test_L2_P <- cbind(as.data.table(ROC_Test), true = Test$amino_acid, pred = predict(L2, Test), Prob = ppm[, Prob])
+
+ROC_Valid <- predict(L2, Valid, type = "prob")
+ppm <- melt(as.data.table(ROC_Valid, keep.rownames = "ID"), value.name = "Prob", variable.name = "pred")[, .SD[which.max(Prob), ], ID]
+ROC_Valid_L2_P <- cbind(as.data.table(ROC_Valid), true = Valid$amino_acid, pred = predict(L2, Valid), Prob = ppm[, Prob])
+```
+
+
+# Performance
+
+## Trade-off
+
+```{r}
+res <- rbind(data.table(State = "L1", Dataset = "TestSet", Predictor = "D + P", ROC_Test_L1), data.table(State = "L1", Dataset = "ValidationSet", Predictor = "D + P", ROC_Valid_L1), 
+             data.table(State = "L1", Dataset = "TestSet", Predictor = "P", ROC_Test_L1_P), data.table(State = "L1", Dataset = "ValidationSet", Predictor = "P", ROC_Valid_L1_P), 
+             data.table(State = "L1", Dataset = "TestSet", Predictor = "D", ROC_Test_L1_X), data.table(State = "L1", Dataset = "ValidationSet", Predictor = "D", ROC_Valid_L1_X), 
+             data.table(State = "L2", Dataset = "TestSet", Predictor = "D + P", ROC_Test_L2), data.table(State = "L2", Dataset = "ValidationSet", Predictor = "D + P", ROC_Valid_L2), 
+             data.table(State = "L2", Dataset = "TestSet", Predictor = "P", ROC_Test_L2_P), data.table(State = "L2", Dataset = "ValidationSet", Predictor = "P", ROC_Valid_L2_P), 
+             data.table(State = "L2", Dataset = "TestSet", Predictor = "D", ROC_Test_L2_X), data.table(State = "L2", Dataset = "ValidationSet", Predictor = "D", ROC_Valid_L2_X)
+             )
+
+res[pred == true, Result := "Correct"]
+res[pred != true, Result := "Wrong"]
+```
+
+```{r}
+cutoffList <- lapply(1:50/50, function(b) {
+  merge(res[, .(Recovery = mean(Prob >= b)), by = Dataset], 
+        res[Prob >= b, .(Accuracy = mean(Result == "Correct")), by = .(State, Dataset, Predictor)])
+})
+cutoffList <- data.table(Cutoff = rep(1:50/50, mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+```
+
+```{r fig.width=9, fig.height=4}
+ggplot(cutoffList, aes(x = Recovery, y = Accuracy * 100, colour = Predictor, lty = State)) + 
+  geom_line() + 
+  facet_wrap(~Dataset) + 
+  theme_bw(base_size = 16) + 
+  scale_x_reverse() +
+  # scale_y_continuous(limits = c(70, 100)) +
+  labs(x = "Recovery (%)", y = "Accuracy (%)")
+```
+
+
+## Confusion Matrix
+
+### Test Set
+
+#### L1
+
+```{r}
+ROC_Test_L1[, true := factor(true, levels = levels(ROC_Test_L1[, pred]))]
+cM <- ROC_Test_L1[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L1") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Test_L1_X[, true := factor(true, levels = levels(ROC_Test_L1_X[, pred]))]
+cM <- ROC_Test_L1_X[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L1 (D)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Test_L1_P[, true := factor(true, levels = levels(ROC_Test_L1_P[, pred]))]
+cM <- ROC_Test_L1_P[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L1 (P)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+
+#### L2
+
+```{r}
+ROC_Test_L2[, true := factor(true, levels = levels(ROC_Test_L2[, pred]))]
+cM <- ROC_Test_L2[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L2") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Test_L2_X[, true := factor(true, levels = levels(ROC_Test_L2_X[, pred]))]
+cM <- ROC_Test_L2_X[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L2 (D)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Test_L2_P[, true := factor(true, levels = levels(ROC_Test_L2_P[, pred]))]
+cM <- ROC_Test_L2_P[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Test set L2 (P)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+### Validation Set
+
+#### L1
+
+```{r}
+ROC_Valid_L1[, true := factor(true, levels = levels(ROC_Valid_L1[, pred]))]
+cM <- ROC_Valid_L1[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L1") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Valid_L1_X[, true := factor(true, levels = levels(ROC_Valid_L1_X[, pred]))]
+cM <- ROC_Valid_L1_X[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L1 (D)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Valid_L1_P[, true := factor(true, levels = levels(ROC_Valid_L1_P[, pred]))]
+cM <- ROC_Valid_L1_P[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L1 (P)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+
+#### L2
+
+```{r}
+ROC_Valid_L2[, true := factor(true, levels = levels(ROC_Valid_L2[, pred]))]
+cM <- ROC_Valid_L2[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L2") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Valid_L2_X[, true := factor(true, levels = levels(ROC_Valid_L2_X[, pred]))]
+cM <- ROC_Valid_L2_X[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L2 (D)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+
+```{r}
+ROC_Valid_L2_P[, true := factor(true, levels = levels(ROC_Valid_L2_P[, pred]))]
+cM <- ROC_Valid_L2_P[, confusionMatrix(pred, true)]
+cM <- as.matrix(cM$table)
+cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
+cM <- data.frame(cM[, -1], row.names = cM[, 1])
+cM <- apply(cM, 2, prop.table)*100
+row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+cM <- cM[, 1:20]
+```
+
+```{r}
+m1 <- reshape2::melt(as.matrix(cM))
+colnames(m1)[3] <- "Percentage"
+ggplot(data = m1, aes(x = Var1, y = Var2, fill = Percentage)) + 
+  geom_tile() + 
+  scale_fill_gradient(low = "#FFF5F0", high = "#67000D") + 
+  labs(x = "Prediction", y = "Reference") +
+  theme_bw(base_size = 15) + 
+  theme(plot.margin = unit(c(0.25, 0, 0, 0), "lines"), axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))  -> p1
+
+ggplot(data.table(A = factor(rownames(cM), levels = rownames(cM)), Percentage = rowSums(cM)), aes(x = A, y = Percentage)) +
+  geom_col(fill = "#A50F15") +
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        plot.margin = unit(c(0, 0, 0, 0), "lines")) + 
+  labs(title = "Valid set L2 (P)") -> p2
+```
+
+```{r fig.width=6, fig.height=6}
+p2 / p1 + plot_layout(heights = c(2, 8))
+```
+

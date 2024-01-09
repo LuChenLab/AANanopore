@@ -1,0 +1,113 @@
+---
+title: "Supplementary Figure 10 a, b"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version3/L1/Modeling_Data.RData")
+
+Nsigs_1 <- Sigs_Train_Upsample[, .(N = .N, n = length(unique(ID))), AA]
+Nsigs_1[, u := N - n]
+Nsigs_1 <- melt.data.table(Nsigs_1, id.vars = "AA")[variable != "N"]
+
+Nsigs_1[, Type := plyr::mapvalues(variable, c("n", "u"), c("Unique signals", "Upsampling signals"))]
+Nsigs_1[, AA := factor(AA, levels = Nsigs_1[variable == "u"][order(value, AA), AA])]
+Nsigs_1[, Type := factor(Type, levels = c("Upsampling signals", "Unique signals"))]
+Nsigs_1[, L := as.character(value)]
+Nsigs_1[value == 1000, L := ""]
+Nsigs_1[value == 0, L := ""]
+Nsigs_1[variable == "n", L := ""]
+```
+
+```{r}
+data <- Nsigs_1[, .(AminoAcid = AA, Number = value, Class = Type, Label = L)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig10A.xlsx")
+```
+
+```{r}
+ggplot(data, aes(x = AminoAcid, y = Number, fill = Class)) + 
+  geom_col() + 
+  geom_text(aes(label = Label), position = position_stack(vjust = .5)) + 
+  scale_fill_manual(values = c("#FEE0D2", "#CB181D")) + 
+  labs(y = "Number of signals", tag = "a") + 
+  theme_bw(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.position = "top", 
+        axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+
+
+```{r}
+Nsigs_2 <- Sigs_Test[, .N, .(AA)]
+Nsigs_2[, AA := factor(AA, levels = levels(Nsigs_1$AA))]
+
+Nsigs_3 <- Sigs_Valid[, .N, .(AA)]
+Nsigs_3[, AA := factor(AA, levels = levels(Nsigs_1$AA))]
+```
+
+```{r}
+data <- rbind(data.table(Dataset = "Testing", Nsigs_2), data.table(Dataset = "Validation", Nsigs_3))
+data <- data[, .(Dataset, AminoAcid = AA, Number = N)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig10B.xlsx")
+```
+
+
+```{r }
+ggplot(data, aes(x = AminoAcid, y = Number, fill = Dataset)) + 
+  geom_col(position = position_dodge()) + 
+  geom_text(aes(label = Number, y = Number + 800), position = position_dodge(width = 0.9), angle = 90) + 
+  scale_y_continuous(limits = c(0, 10000)) + 
+  labs(y = "Number of signals", tag = "b") + 
+  theme_bw(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.position = "top", 
+        axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+
+
+
+
+
+
+
+

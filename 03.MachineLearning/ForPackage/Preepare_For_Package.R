@@ -103,25 +103,57 @@ cl <- makePSOCKcluster(10)
 registerDoParallel(cl)
 
 RFC <- train(Class ~ ., 
-             data = Train, 
-             preProc = c("center", "scale", "YeoJohnson", "nzv"),
-             method = "rf", 
-             trControl = fitControl,
-             verbose = FALSE,
-             ## to evaluate:
-             tuneGrid = expand.grid(mtry = 60),
-             # tuneLength = 50,
-             metric = "Accuracy", 
-             allowParallel = TRUE)
+               data = Train, 
+               preProc = c("center", "scale", "YeoJohnson", "nzv"),
+               method = "rf", 
+               trControl = fitControl,
+               verbose = FALSE,
+               ## to evaluate:
+               tuneGrid = expand.grid(mtry = 60),
+               # tuneLength = 50,
+               metric = "Accuracy", 
+               allowParallel = TRUE)
 saveRDS(RFC, file = paste0("./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/RF_model.Rds"))
 
 saveRDS(RFC$finalModel, file = paste0("./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/RF_finalModel.Rds"))
 
 
 
+set.seed(9560)
+up_Mat <- upSample(x = Mat[, !colnames(Mat) %in% c("ID", "Class"), with = F], y = Mat$Class)
+up_Mat <- as.data.table(up_Mat)
+set.seed(3456)
+Train <- up_Mat[, .SD[sample(.N, round(up_Mat[, .N, Class][, min(N)]*0.6)), ], Class]
+
+saveRDS(Train, file = "./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/Train2.Rds")
+Train <- readRDS("./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/Train2.Rds")
 
 
 
+
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10)
+
+library(doParallel)
+cl <- makePSOCKcluster(40)
+registerDoParallel(cl)
+
+model <- train(Class ~ ., 
+               data = Train, 
+               preProc = c("center", "scale", "YeoJohnson", "nzv"),
+               method = "rf", 
+               trControl = fitControl,
+               verbose = FALSE,
+               ## to evaluate:
+               tuneGrid = expand.grid(mtry = 60),
+               # tuneLength = 50,
+               metric = "Accuracy", 
+               allowParallel = TRUE)
+saveRDS(model, file = paste0("./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/RF_model_up.Rds"))
+stopCluster(cl)
+
+saveRDS(model$finalModel, file = paste0("./analysis/03.MachineLearning/ForPackage/02.Modeling/01.RF/01.Models/RF_model_up_finalModel.Rds"))
 
 
 

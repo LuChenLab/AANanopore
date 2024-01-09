@@ -1,0 +1,151 @@
+---
+title: "Supplementary Figure 18"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+FHL <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FHL.txt", sep = "\t")
+FYSL <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/FYSL.txt", sep = "\t")
+LEF <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LEF.txt", sep = "\t")
+LVFAG <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAG.txt", sep = "\t")
+LVFA <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFA.txt", sep = "\t")
+LVFAK <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LVFAK.txt", sep = "\t")
+LFGV <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LFGV.txt", sep = "\t")
+# EAFNL <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/EAFNL.txt", sep = "\t")
+# LNFAE <- fread("./analysis/93.Revision/04.PolypeptideSimilarity/01.AminoAcidPrediction/LNFAE.txt", sep = "\t")
+```
+
+```{r}
+# polyp <- rbind(data.table(PPT = "LVFFAG", LVFAG), 
+#                data.table(PPT = "LVFFAK", LVFAK), 
+#                data.table(PPT = "LVFFA", LVFA), 
+#                data.table(PPT = "FYSL", FYSL), 
+#                data.table(PPT = "EAFNL", EAFNL), 
+#                data.table(PPT = "LNFAE", LNFAE), 
+#                data.table(PPT = "LFGV", LFGV), 
+#                data.table(PPT = "FHL", FHL), 
+               # data.table(PPT = "LEF", LEF))
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta <- meta[!is.na(amino_acid)]
+
+EAFNL1 <- fread("./analysis/91.RealTimeHydrolysis/04.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL2 <- fread("./analysis/91.RealTimeHydrolysis/34.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL <- rbind(EAFNL1, EAFNL2)
+EAFNL[, A := as.character(A)]
+EAFNL <- merge(meta, EAFNL, by.x = "file_id", by.y = "A")
+```
+
+```{r}
+polyp <- rbind(data.table(PPT = "LVFFAG", LVFAG[, .(A, ID)]), 
+               data.table(PPT = "LVFFAK", LVFAK[, .(A, ID)]), 
+               data.table(PPT = "LVFFA", LVFA[, .(A, ID)]), 
+               data.table(PPT = "FYSL", FYSL[, .(A, ID)]), 
+               EAFNL[file_id != "21827012.1", .(PPT = seq, A = file_id, ID)], 
+               data.table(PPT = "LFGV", LFGV[, .(A, ID)]), 
+               data.table(PPT = "FHL", FHL[, .(A, ID)]), 
+               data.table(PPT = "LEF", LEF[, .(A, ID)]))
+```
+
+```{r}
+id2rep <- unique(polyp[, .(PPT, file_id = A)])
+id2rep <- id2rep[, .(file_id, Experiment = paste(PPT, seq_len(.N), sep = "_")), PPT]
+```
+
+```{r}
+CurrList <- mclapply(polyp[, unique(A)], function(fi) {
+  # print(fi)
+  Curr <- readRDS(paste0("./analysis/81.ABFProcessing/SignalCurrent/SignalCurrent_", gsub("\\.[0-9]$", "", fi), ".Rds"))
+  stopifnot(all(polyp[A == fi, ID] %in% Curr[, ID]))
+  Curr[ID %in% polyp[A == fi, ID]]
+}, mc.cores = 20)
+```
+
+```{r}
+CurrList_Den <- lapply(CurrList, function(x) {
+  density(x[, Current], from = 0, to = 1, n = 1024, bw = 0.001)$y
+})
+CurrList_Den <- do.call(rbind, CurrList_Den)
+row.names(CurrList_Den) <- polyp[, unique(A)]
+row.names(CurrList_Den) <- plyr::mapvalues(row.names(CurrList_Den), id2rep$file_id, id2rep$Experiment)
+```
+
+```{r}
+LSGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LSGV_prediction_V2.txt", sep = "\t")
+LSGV <- split(LSGV, LSGV$experiment)
+```
+
+```{r}
+LSGV_L <- lapply(LSGV, function(x) {
+  Curr <- lapply(x[, unique(A)], function(fi) {
+    Curr <- readRDS(paste0("./analysis/81.ABFProcessing/SignalCurrent/SignalCurrent_", gsub("\\.[0-9]$", "", fi), ".Rds"))
+    stopifnot(all(x[A == fi, ID] %in% Curr[, ID]))
+    Curr[ID %in% x[A == fi, ID]]
+  })
+  Curr <- do.call(rbind, Curr)
+  density(Curr[, Current], from = 0, to = 1, n = 1024, bw = 0.001)$y
+})
+LSGV_Den <- do.call(rbind, LSGV_L)
+row.names(LSGV_Den) <- gsub("Rep", "LSGV_", names(LSGV))
+```
+
+```{r}
+CurrList_Dens <- rbind(CurrList_Den, LSGV_Den)
+```
+
+```{r}
+dismat <- as.matrix(stats::dist(CurrList_Dens, method = "euclidean"))
+```
+
+```{r}
+colnames(dismat) <- gsub("_[0-9]$", "", colnames(dismat))
+rownames(dismat) <- gsub("_[0-9]$", "", rownames(dismat))
+```
+
+```{r}
+openxlsx::write.xlsx(as.data.table(dismat, keep.rownames = ""), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig18.xlsx", overwrite = T)
+```
+
+```{r}
+pheatmap::pheatmap(dismat, color = colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "Reds")))(100), show_rownames = T, show_colnames = F)
+```
+
+
+

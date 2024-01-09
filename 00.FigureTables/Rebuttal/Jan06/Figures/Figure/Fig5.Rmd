@@ -1,0 +1,167 @@
+---
+title: "Figure 5"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+# c
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig5C.xlsx"))
+```
+
+```{r}
+ggplot(data[sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = AminoAcid, alpha = Density), size = 1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 3) + 
+  scale_colour_manual(breaks = names(a_cols[unlist(strsplit("EAFNL", ""))]), values = a_cols[unlist(strsplit("EAFNL", ""))], guide = guide_legend(override.aes = list(size = 2))) + 
+  guides(alpha = "none") + 
+  facet_wrap(~ Peptide) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_bw(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        legend.position = "none",
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[AminoAcid %in% x[, .N, AminoAcid][N > 3, AminoAcid]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = AminoAcid, colour = AminoAcid), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(a_cols), values = a_cols) + 
+    scale_colour_manual(breaks = names(a_cols), values = a_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), 
+          axis.text = element_text(colour = "black"), 
+          axis.title = element_text(colour = "black"), 
+          legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% a_cols[target]]
+  tab <- merge(tab, data.table(AA = names(a_cols), colour = a_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.5, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 6, direction = "y", nudge_y = 0, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+
+p2 <- AADensityPlot1(x = data[Peptide == "EAFNL"], target = unlist(strsplit("EAFNL", ""))) + facet_wrap(~"EAFNL")
+p3 <- AADensityPlot1(x = data[Peptide == "LNFAE"], target = unlist(strsplit("EAFNL", ""))) + facet_wrap(~"LNFAE")
+```
+
+```{r}
+p1 <- p1 + theme(strip.background = element_blank(), strip.text = element_blank(), plot.margin = unit(c(0, 1, 1, 1), "line"))
+p2 <- p2 + scale_x_continuous(limits = c(0.1, 0.3)) + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 0, 0, 0), "line"), plot.tag = element_text(face = "bold"))
+p3 <- p3 + scale_x_continuous(limits = c(0.1, 0.3)) + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 0, 0, 1), "line"))
+```
+
+
+```{r}
+design <- "
+  12
+  33
+  33
+"
+p2 + p3 + p1 + 
+  plot_layout(design = design)
+```
+
+
+
+# d
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig5D.xlsx"))
+data[, AminoAcid := factor(AminoAcid, levels = c("E", "A", "F", "N", "L"))]
+```
+
+```{r}
+ggplot(data, aes(AminoAcid, y = Percentage)) + 
+  stat_summary(fun.data = "mean_sd", size = 0.5, geom = "errorbar", width = .12) + 
+  geom_col(data = data[, .(Percentage = mean(Percentage)), .(Peptide, AminoAcid)], aes(AminoAcid, y = Percentage, fill = Peptide), alpha = 0.5) + 
+  stat_cor(data = data, mapping = aes(as.numeric(AminoAcid), y = Percentage), method = "spearman", 
+           size = 5, p.digits = 1, cor.coef.name = "rho", label.x.npc = 0.15, label.y.npc = 1) + 
+  geom_point(aes(colour = paste0(Peptide, Experiment)), size = 1.5, height = 0) +
+  geom_line(aes(x = as.numeric(AminoAcid), y = Percentage, colour = paste0(Peptide, Experiment))) + 
+  scale_colour_brewer(palette = "Dark2", guide = "none") + 
+  scale_fill_wsj() + 
+  facet_wrap(~ Peptide) + 
+  labs(y = "Percentage (%)", x = "Identified amino acid") + 
+  # scale_y_log10() + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p4
+```
+
+```{r fig.height=4, fig.width=15, echo=FALSE}
+design <- "
+  1122444
+  3333444
+  3333444
+"
+p2 + p3 + p1 + p4 + 
+  plot_layout(design = design)
+```
+
+
+```{r fig.height=13, fig.width=22, echo=FALSE}
+grDevices::cairo_pdf("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig5.pdf", width = 15, height = 4)
+p2 + p3 + p1 + p4 + 
+  plot_layout(design = design)
+dev.off()
+```

@@ -1,0 +1,989 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(patchwork)
+library(changepoint)
+
+SignalFiltering <- function(x) {
+  x <- x[DeltaMean < 1 & Valid == TRUE]
+  # x <- x[DwellTime >= with(density(x[, DwellTime], n = 10000, adjust = 1), x[which.max(y)])]
+  x <- x[DwellTime > 0.001]
+  x <- x[StageSD < 3]
+  x <- x[LeftLength >= 50 & RightLength >= 50]
+  x <- x[BaseMean > min(WhiskerRange(x[, BaseMean])) & BaseMean < max(WhiskerRange(x[, BaseMean]))]
+  rk <- rank(x[, DwellTime]) + rank(x[, -1 * StageSD])
+  x[rk > quantile(rk, 0.05)]
+}
+
+SignalCurrent <- function(x, abf, cores = 10) {
+  Sigs_Multiple_Current <- mclapply(seq_len(nrow(x)), FUN = function(i) {
+    data.table(ID = x[i, ID], Current = abf[Time > x[i, StartTime] & Time < x[i, EndTime], pA] / x[i, BaseMean])
+  }, mc.cores = cores)
+  do.call(rbind, Sigs_Multiple_Current)
+}
+
+densityPeak <- function(x, bw = 50, n = 1024, plot = T, ...) {
+  Peaks <- function(x, y) {
+    stopifnot(length(x) == length(y))
+    uR <- IRanges(diff(y) >= 0)
+    dR <- IRanges(diff(y) <= 0)
+    res <- do.call(c, lapply(seq_along(uR), function(i) {
+      reduce(c(uR[i], dR[i]))
+    }))
+    pk <- res[queryHits(findOverlaps(res, IRanges(which.max(y), which.max(y))))]
+    c(x[start(pk)], x[end(pk)])
+  }
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  if(plot) {
+    plot(den)
+    abline(v = ps, lty = 2, col = 2)
+  } else {
+    return(ps)
+  }
+}
+```
+
+```{r}
+setwd("/mnt/raid61/Personal_data/tangchao/AANanopore")
+library(data.table)
+library(ggplot2)
+library(Biostrings)
+
+meta1 <- data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525.xlsx"))
+meta2 <- data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525additional.xlsx"))
+meta <- rbind(meta1, meta2)
+meta[amino_acid == "cys", amino_acid := "Cys"]
+
+meta <- meta[file_name != 21703001]
+```
+
+```{r}
+Sig0 <- lapply(meta[, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+Sig1 <- merge(Sig1, meta[, .(file_name = as.character(file_name), amino_acid, concentration)], by = "file_name")
+Sig1[, AA := plyr::mapvalues(amino_acid, Biostrings::AMINO_ACID_CODE, names(Biostrings::AMINO_ACID_CODE))]
+```
+
+```{r}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = AA, y = DwellTime * 1000)) + 
+  geom_violin() + 
+  stat_summary(fun.data = "mean_sd") +
+  scale_y_log10()
+```
+
+
+# Asn
+
+```{r}
+a <- "Asn"
+Current <- lapply(meta[amino_acid == a, file_name], function(x) {
+  readRDS(paste0("./analysis/11.SignalIdentification/Dec26/SignalCurrent_", x, ".Rds"))
+})
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+Current <- do.call(rbind, Current)
+```
+
+```{r}
+Current1 <- Current[ID %in% Sig1[, ID]]
+Current1$file_name <- mapply(function(x) x[1], strsplit(Current1[, ID], "_"))
+```
+
+```{r}
+ggplot(Current1, aes(x = Current, colour = file_name)) + 
+  geom_density()
+```
+
+
+```{r fig.width=10, fig.height=4}
+densityPeak(Current1[, Current], bw = 1, n = 1024, plot = T, adjust = 0.000875)
+ps <- densityPeak(Current1[, Current], bw = 1, n = 1024, plot = F, adjust = 0.000875)
+```
+
+```{r}
+Sig2 <- Sig1[SignalCurrent / BaseMean > min(ps) & SignalCurrent / BaseMean < max(ps)]
+Sig3 <- do.call(rbind, Sig0)[SignalCurrent / BaseMean > min(ps) & SignalCurrent / BaseMean < max(ps)]
+```
+
+```{r}
+Sig2$file_name <- mapply(function(x) x[1], strsplit(Sig2[, ID], "_"))
+Sig3$file_name <- mapply(function(x) x[1], strsplit(Sig3[, ID], "_"))
+```
+
+```{r}
+ggplot(Sig2, aes(x = SignalCurrent / BaseMean, colour = file_name)) + 
+  geom_density()
+ggplot(Sig3, aes(x = SignalCurrent / BaseMean, colour = file_name)) + 
+  geom_density()
+```
+
+```{r}
+densityPeak(Sig2[, SignalCurrent / BaseMean], bw = 1, n = 2048, plot = T, adjust = 0.0007)
+ps2 <- densityPeak(Sig2[, SignalCurrent / BaseMean], bw = 1, n = 2048, plot = F, adjust = 0.0007)
+```
+
+```{r}
+ggplot(Sig2, aes(x = SignalCurrent / BaseMean, colour = file_name)) + 
+  geom_density() + 
+  geom_vline(xintercept = ps2)
+ggplot(Sig3, aes(x = SignalCurrent / BaseMean, colour = file_name)) + 
+  geom_density() + 
+  geom_vline(xintercept = ps2)
+```
+
+```{r}
+Sig4 <- do.call(rbind, Sig0)[SignalCurrent / BaseMean > min(ps2) & SignalCurrent / BaseMean < max(ps2)]
+Sig4$file_name <- mapply(function(x) x[1], strsplit(Sig4[, ID], "_"))
+```
+
+```{r}
+ggplot(Sig4[SignalCurrentPercent == 100 & DeltaMean < 1], aes(x = SignalCurrent / BaseMean, y = DwellTime)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0.5, 1))
+```
+
+```{r fig.width=6, fig.height=9}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Asp
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Asp"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Gln
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Gln"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Glu
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Glu"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Ile
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Ile"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+# Leu
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Leu"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt"))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+Sig1$file_name <- mapply(function(x) x[1], strsplit(Sig1[, ID], "_"))
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100 & DwellTime < 0.03], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100 & DwellTime < 0.03], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Lys
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Lys"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(do.call(rbind, Sig0)[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  lims(x = c(0, 1)) +
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)", 
+       title = paste0(a, ": ", do.call(rbind, Sig0)[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Met
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Met"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Phe
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Phe"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Thr
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Thr"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Trp
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Trp"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Tyr
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Tyr"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(do.call(rbind, Sig0)[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  lims(x = c(0, 1)) +
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)", 
+       title = paste0(a, ": ", do.call(rbind, Sig0)[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Val
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Val"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Ser
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Ser"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Ala
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Ala"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Gly
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Gly"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Arg
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Arg"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# His
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "His"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(do.call(rbind, Sig0)[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Pro
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Pro"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+
+
+# Cys
+
+```{r}
+meta[, unique(amino_acid)]
+```
+
+```{r}
+a <- "Cys"
+
+Sig0 <- lapply(meta[amino_acid == a, file_name], function(x) {
+  data.table(file_name = as.character(x), fread(paste0("./analysis/11.SignalIdentification/Dec26/RawSignal_", x, ".txt")))
+})
+Sig1 <- lapply(Sig0, SignalFiltering)
+Sig1 <- do.call(rbind, Sig1)
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(Sig1[SignalCurrentPercent == 100], aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  scale_y_log10() + 
+  facet_wrap(~file_name, ncol = 1, strip.position = "right", scales = "free_y") + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none")  + 
+  labs(x = "Blockade", y = "Dwell time (ms)")
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig0.pdf"), width = Sig1[SignalCurrentPercent == 100, length(unique(file_name))]*1.5, height = 6)
+```
+
+```{r fig.height=4, fig.width=6}
+ggplot(Sig1[SignalCurrentPercent == 100], 
+       aes(x = 1 - SignalCurrent / BaseMean, y = DwellTime * 1000, colour = file_name)) + 
+  geom_point(size = .1) + 
+  lims(x = c(0, 1)) +
+  scale_y_log10() + 
+  theme_bw(base_size = 15) +
+  theme(legend.position = "none") + 
+  labs(x = "Blockade", y = "Dwell time (ms)", title = paste0(a, ": ", Sig1[SignalCurrentPercent == 100, .N]))
+ggsave(paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.pdf"), width = 6, height = 4)
+fwrite(Sig1, paste0("./analysis/12.SignalFiltering/Dec27/", a, "_Sig1.txt"), sep = "\t", row.names = F, quote = F)
+```
+

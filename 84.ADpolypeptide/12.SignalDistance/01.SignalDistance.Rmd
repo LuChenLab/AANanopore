@@ -1,0 +1,508 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(IRanges)
+library(caret)
+library(shiny)
+library(plotly)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)])
+
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC")
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+KnnSelecting <- function(signals, dists, dist_method = "euclidean", k = 20, noise = 0) {
+  stopifnot(noise < k)
+  if(is(dists, "dist")) {
+    knn1 <- dbscan::kNN(dists, k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists, "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  } else {
+    knn1 <- dbscan::kNN(dists[[dist_method]], k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists[[dist_method]], "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  }
+  
+  tu <- row.names(knn1$id)[which(rowSums(knn2) <= noise)]
+  # tu <- union(tu, knn2[which(rowSums(knn2) <= noise), 1])
+  tu <- grep("^Noise", tu, invert = TRUE, value = TRUE)
+  ggplot(signals, aes(x = Blockade, y = DwellTime, colour = !ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = c("#E41A1C", "#377EB8")) + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p1
+  ggplot(signals[ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#E41A1C") + 
+    theme_classic() + 
+    theme(legend.position = "none") + 
+    labs(title = length(tu)) -> p2
+  ggplot(signals[!ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#377EB8") + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p3
+  print(p1 + p2 + p3)
+  return(tu)
+}
+
+RemoveOutlier1 <- function(tree, n = 10, o = NULL) {
+  k <- ceiling(length(res.hc$labels)/100)
+  res_ct <- stats::cutree(res.hc, k = k)
+  while (sum(table(res_ct) >= n) == 1) {
+    k <- k + 1
+    res_ct <- stats::cutree(res.hc, k = k)
+  }
+  if(is.null(o)) o <- n
+  names(res_ct[res_ct %in% names(which(table(res_ct) >= o))])
+}
+RemoveOutlier <- function(tree, n = 10, Keep = 0.95) {
+  h <- length(tree$height)
+  g <- cutree(tree, h = tree$height[h])
+  g <- data.table(tip = names(g), cluster = g)
+  
+  while (g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] > Keep) {
+    h <- h - 1
+    g <- cutree(tree, h = tree$height[h])
+    g <- data.table(tip = names(g), cluster = g)
+  }
+  cat(paste0("Keep: ", round(g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] * 100, 2), "%"))
+  g[cluster %in% g[, .N, cluster][N >= n, cluster], tip]
+}
+
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+# Peaks <- function(x, y) {
+#   stopifnot(length(x) == length(y))
+#   uR <- IRanges(diff(y) >= 0)
+#   dR <- IRanges(diff(y) <= 0)
+#   res <- do.call(c, lapply(seq_along(uR), function(i) {
+#     reduce(c(uR[i], dR[i]))
+#   }))
+#   
+#   Ps <- mapply(seq_along(res), FUN = function(i) {
+#     x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+#   })
+#   res <- IRanges(start = x[start(res)], end = x[end(res)])
+#   end(res[length(res)]) <- max(x)
+#   attr(res, "peaks") <- Ps
+#   return(res)
+# }
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+densityPeak <- function(x, bw = 0.01, peaks = 2, n = 1024, from = 0, to = 1, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  dx <- attr(ps, "peaks")
+  dy <- den$y[den$x %in% attr(ps, "peaks")]
+  dy <- dy/max(dy)
+  
+  dx2 <- dx[dx <= dx[which.max(dy)]]
+  dy2 <- dy[dx <= dx[which.max(dy)]]
+  
+  dx2 <- dx2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  dy2 <- dy2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  res <- sort(dx2, decreasing = T)
+  df <- mean(abs(diff(den$y)))
+  CI <- mapply(res, FUN = function(i) {
+    from <- with(den, x[x < i])[max(start(IRanges(diff(with(den, y[x < i])) > mean(abs(diff(with(den, y[x < i])))))))]
+    to <- with(den, x[x > i])[min(end(IRanges(diff(with(den, y[x > i])) < mean(abs(diff(with(den, y[x > i])))))))]
+    min(c(i - from, to - i))
+  })
+  attr(res, "CI") <- CI
+  if(plot) {
+    plot(den)
+    abline(v = res, lty = 2, col = 2)
+    abline(v = res - attr(res,"CI"), lty = 2, col = 3)
+    abline(v = res + attr(res,"CI"), lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+
+BaseMeanFiltering <- function(SigFile, starttime = NULL, endtime = NULL, outdir = NULL, target = NULL, product = NULL) {
+  if(is.null(starttime)) stop()
+  if(is.null(endtime)) stop()
+  if(is.null(outdir)) stop()
+  if(is.null(target)) stop()
+  outdir <- gsub("//", "/", paste0(outdir, "/", target))
+  if(!dir.exists(outdir)) dir.create(outdir)
+  dataset <- fread(SigFile)
+  dataset <- dataset[StartTime > starttime*60 & EndTime < endtime*60]
+  dataset[, A := target]
+  dataset[, DwellTime := DwellTime * 1000]
+  shinyApp(
+    ui = fluidPage(
+      fluidRow(style = "padding-bottom: 20px;",
+               column(2, numericInput('size', 'Point size', value = .3, min = .1, max = 1, step = .1)),
+               column(3, sliderInput('nbins', 'Number of bins', value = 500, min = 100, max = 1000, step = 50)),
+               column(3, sliderInput('BaseMean', 'BaseMean region', value = c(90, 130), min = 80, max = max(dataset[, round(BaseMean)]))),
+               column(3, radioButtons(inputId = "LogScale", label = "log scale:", choices = c("TRUE", "FALSE"), inline = T))
+      ),
+      fluidRow(column(6, plotlyOutput('BaseMeanBlockade')), column(6, plotlyOutput('BlockadeDwellTime'))),
+      plotlyOutput('BaseMeanHistogram'),
+      actionButton("goButton", 'Save', class = "btn-success"),
+      verbatimTextOutput("sp")
+    ), 
+    server = function(input, output, session) {
+      selectedData <- reactive({
+        dataset[BaseMean > input$BaseMean[1] & BaseMean < input$BaseMean[2]]
+      })
+      
+      output$BaseMeanBlockade = renderPlotly({
+        ggplot(selectedData(), aes(x = BaseMean, y = Blockade)) + 
+          geom_point(size = input$size) + 
+          # geom_hline(yintercept = AABlockade[amino_acid %in% selectedData()[, unique(A)], Blockade], color = "red") + 
+          theme_minimal() -> p
+        ggplotly(p)
+      })
+      
+      output$BaseMeanHistogram = renderPlotly({
+        ggplot(selectedData(), aes(x = BaseMean)) + 
+          geom_histogram(bins = input$nbins) + 
+          theme_minimal() -> p2
+        ggplotly(p2) %>% layout(dragmode = "select")
+      })
+      
+      output$BlockadeDwellTime = renderPlotly({
+        d <- (event_data("plotly_selected"))
+        if(is.null(d)) {
+          selectedData2 <- reactive({
+            dataset
+          })
+        } else {
+          selectedData2 <- reactive({
+            dataset[BaseMean > min(d$x) & BaseMean < max(d$x)]
+          })
+        }
+        ggplot(selectedData2(), aes(x = Blockade, y = DwellTime)) + 
+          geom_point(size = input$size) + 
+          # geom_vline(xintercept = product, color = "red") +
+          theme_minimal() + 
+          labs(title = selectedData2()[, unique(A)]) -> p3
+        if(!is.null(product)) {
+          p3 <- p3 + geom_vline(xintercept = product, color = "red")
+        }
+        
+        if(input$LogScale == "TRUE") {
+          p3 <- p3 + scale_y_log10()
+        }
+        ggplotly(p3)
+      })
+      
+      output$sp <- renderPrint({
+        d <- (event_data("plotly_selected"))
+        if(is.null(d)) {
+          cat("Number of selected points:", nrow(d))
+        } else {
+          selectedData2 <- reactive({
+            dataset[BaseMean > min(d$x) & BaseMean < max(d$x)]
+          })
+          if(input$goButton != 0) {
+            if(!is.null(d)) {
+              fwrite(selectedData2(), paste0(outdir, "/", gsub(".txt", ".MainL0.txt", basename(SigFile))), sep = "\t", quote = F)
+              cat("Saved", nrow(selectedData2()), "points.")
+            } else {
+              cat("Number of selected points:", nrow(selectedData2()))
+            }
+          } else {
+            cat("Number of selected points:", nrow(selectedData2()))
+          }
+        }
+      })
+    }
+  )
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+# Select main base line
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/20231020 氨肽酶超滤.xlsx", sheet = 1))
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "base_line", "note")
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/84.ADpolypeptide/11.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/84.ADpolypeptide/11.SelectedL0/", file_id, ".MainL0.txt")]
+```
+
+# Remain sigle main peak signals
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+## LVFAG
+
+```{r}
+sig0 <- do.call(rbind, lapply(meta[amino_acid == "LVFAG", sig_file], fread))
+```
+
+```{r fig.width=16, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAG", ""))], Blockade], col = 2) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1) + 
+  theme_base()
+```
+
+
+## LVFAK
+
+```{r}
+sig0 <- do.call(rbind, lapply(meta[amino_acid == "LVFAK", sig_file], fread))
+```
+
+```{r fig.width=16, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LVFAK", ""))], Blockade], col = 2) + 
+  scale_y_log10() + 
+  geom_hline(yintercept = 0.35, col = 2) + 
+  facet_wrap(~ A, nrow = 1) + 
+  theme_base()
+```
+
+## Background
+
+```{r}
+sig0 <- do.call(rbind, lapply(meta[is.na(amino_acid) | amino_acid == "AP", sig_file], fread))
+```
+
+```{r fig.width=25, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1) + 
+  geom_hline(yintercept = 0.3, col = 2)
+```
+
+```{r fig.width=25, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1) + 
+  geom_hline(yintercept = 0.3, col = 2)
+```
+
+
+
+
+
+```{r}
+bgfile <- meta[is.na(amino_acid) | amino_acid == "AP", sig_file]
+bgsignals <- do.call(rbind, lapply(bgfile, fread))
+bgsignals[, ID := paste0("Noise_", ID)]
+bgsignals <- bgsignals[Blockade < 0.3 & DwellTime > 0.35]
+
+B_file <- unique(meta[is.na(amino_acid) | amino_acid == "AP", file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+Big_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+Big_FeatureMatrix[, ID := paste0("Noise_", ID)]
+Big_FeatureMatrix <- Big_FeatureMatrix[ID %in% bgsignals$ID]
+```
+
+```{r}
+bgsignals0 <- do.call(rbind, lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals", "_background.txt", full.names = TRUE), fread))[Blockade < 0.3 & DwellTime > 0.3]
+bgsignals0[, ID := paste0("Noise_", ID)]
+Big_FeatureMatrixs <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/01.SignalDistance/StandardAA_Big_FeatureMatrixs.Rds")
+Big_FeatureMatrixs <- Big_FeatureMatrixs[ID %in% bgsignals0$ID]
+Big_FeatureMatrixs[, AA := NULL]
+```
+
+```{r}
+mclapply(meta[amino_acid == "LVFAK", sig_file], function(a) {
+  print(a)
+  outfile <- file.path("./analysis/84.ADpolypeptide/12.SignalDistance", gsub(".MainL0.txt", ".signal.dist.Rds", basename(a)))
+  if(file.exists(outfile)) return(NULL)
+  sig0 <- fread(a)[Blockade < 0.3 & DwellTime > 0.35]
+  B_file <- unique(meta[sig_file == a, file_name])
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+  Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+  if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+    Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+  } else {
+    Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+  }
+  
+  FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+  setkey(FeatureMatrix, ID)
+  FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+  euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+  saveRDS(euclidean, file = outfile)
+}, mc.cores = 3)
+```
+
+
+```{r}
+mclapply(meta[amino_acid == "LVFAG", sig_file], function(a) {
+  print(a)
+  outfile <- file.path("./analysis/84.ADpolypeptide/12.SignalDistance", gsub(".MainL0.txt", ".signal.dist.Rds", basename(a)))
+  if(file.exists(outfile)) return(NULL)
+  sig0 <- fread(a)[Blockade < 0.3 & DwellTime > 0.35]
+  B_file <- unique(meta[sig_file == a, file_name])
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+  Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+  if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+    Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+  } else {
+    Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+  }
+  
+  FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+  setkey(FeatureMatrix, ID)
+  FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+  euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+  saveRDS(euclidean, file = outfile)
+}, mc.cores = 3)
+```
+
+
+```{r}
+sig0 <- lapply(meta[amino_acid == "LVFAK", sig_file], fread)
+sig0 <- do.call(rbind, sig0)[Blockade < 0.3 & DwellTime > 0.35]
+B_file <- unique(meta[amino_acid == "LVFAK", file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+  Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+} else {
+  Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+}
+
+FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+saveRDS(euclidean, file = "./analysis/84.ADpolypeptide/12.SignalDistance/LVFAK_all_sigs_distance.Rds")
+```
+
+
+
+```{r}
+sig0 <- lapply(meta[amino_acid == "LVFAG", sig_file], fread)
+sig0 <- do.call(rbind, sig0)[Blockade < 0.3 & DwellTime > 0.35]
+B_file <- unique(meta[amino_acid == "LVFAG", file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+  Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+} else {
+  Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+}
+
+FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+saveRDS(euclidean, file = "./analysis/84.ADpolypeptide/12.SignalDistance/LVFAG_all_sigs_distance.Rds")
+```
+
+

@@ -1,0 +1,216 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+```
+
+```{r}
+plot_mix_comps <- function(x, mu, sigma, lam) {
+  lam * dnorm(x, mu, sigma)
+}
+```
+
+```{r}
+AABlockade <- data.table(AA = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"), 
+                         Blockade = c(0.14718, 0.17148, 0.16516, 0.21409, 0.18622, 0.24528, 0.1882, 0.12072, 0.24652, 0.20722, 0.1995, 0.16875, 0.19772, 0.22018, 0.2183, 0.13131, 0.16101, 0.22744, 0.21276, 0.19044))
+AABlockade$amino_acid <- plyr::mapvalues(AABlockade$AA, names(Biostrings::AMINO_ACID_CODE), Biostrings::AMINO_ACID_CODE)
+```
+
+```{r}
+set.seed(10)
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(aa_cols) <- Biostrings::AA_STANDARD
+aa_cols[aa_cols == "#FFFF99"] <- "#000000"
+```
+
+
+# L1
+
+```{r}
+L1_Files <- list.files("./analysis/12.SignalFiltering/Dec28/Filter2", "_Signal1_Mainly_L1.txt", full.names = TRUE)
+```
+
+```{r}
+L1_Mat <- lapply(L1_Files, fread)
+names(L1_Mat) <- gsub("_Signal1_Mainly_L1.txt", "", basename(L1_Files))
+L1_Mat <- lapply(L1_Mat, function(x) x[sample(.N, 20), ])
+```
+
+```{r}
+Plot_data <- lapply(1:20, function(i) {
+  Ai <- L1_Mat[[i]]
+  Si <- mclapply(seq_len(nrow(Ai)), function (j) {
+    Si <- Ai[j, ]
+    abf <- readRDS(paste0("./analysis/11.SignalIdentification/Dec27/ABF_", as.character(Si[, file_name]), ".Rds"))
+    current <- abf[Time >= Si[, StartTime] - 0.001 & Time <= Si[, EndTime] + 0.001]
+    current[, Scaled_pA := pA / Si$BaseMean]
+    return(current)
+  }, mc.cores = 10)
+  Si <- data.table(ID = rep(Ai[, ID], mapply(nrow, Si)), do.call(rbind, Si))
+  data.table(amino_acid = names(L1_Mat)[i], Si)
+})
+```
+
+
+```{r fig.width=20, fig.height=1.5}
+ggplot(Plot_data[[1]], aes(x = Time, y = Scaled_pA)) + 
+  geom_line() + 
+  geom_hline(yintercept = AABlockade[amino_acid == Plot_data[[1]][, unique(amino_acid)], 1- Blockade], colour = 2) + 
+  scale_y_continuous(n.breaks = 5) +
+  facet_wrap(~ ID, nrow = 1, scales = "free_x") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        strip.text = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.grid.major.x = element_blank()) + 
+  labs(y = Plot_data[[1]][, unique(amino_acid)])
+```
+
+```{r fig.width=20, fig.height=20}
+Ps <- lapply(1:20, function(i) {
+  ggplot(Plot_data[[i]], aes(x = Time, y = Scaled_pA)) + 
+    geom_line() + 
+    geom_hline(yintercept = AABlockade[amino_acid == Plot_data[[i]][, unique(amino_acid)], 1- Blockade], colour = 2) + 
+    scale_y_continuous(n.breaks = 5) +
+    facet_wrap(~ ID, nrow = 1, scales = "free_x") + 
+    theme_bw(base_size = 15) + 
+    theme(axis.title.x = element_blank(), 
+          axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(), 
+          strip.text = element_blank(), 
+          panel.grid.minor = element_blank(), 
+          panel.grid.major.x = element_blank()) + 
+    labs(y = Plot_data[[i]][, unique(amino_acid)])
+})
+```
+
+```{r fig.width=20, fig.height=20}
+cowplot::plot_grid(plotlist = Ps, ncol = 1, align = "hv")
+ggsave("./analysis/12.SignalFiltering/Dec28/Filter2/Plot/Sample_L1.pdf", width = 15, height = 20)
+```
+
+
+# L2
+
+```{r}
+L2_Files <- list.files("./analysis/12.SignalFiltering/Dec28/Filter2", "_Signal1_Mainly_L2.txt", full.names = TRUE)
+```
+
+```{r}
+L2_Mat <- lapply(L2_Files, fread)
+names(L2_Mat) <- gsub("_Signal1_Mainly_L2.txt", "", basename(L2_Files))
+L2_Mat <- data.table(amino_acid = rep(names(L2_Mat), mapply(nrow, L2_Mat)), do.call(rbind, L2_Mat))
+```
+
+```{r}
+L2_Mat[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+L2_Mat[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+L2_Mat[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+L2_Mat[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+aaBlockade <- lapply(L2_Mat[, unique(aa)], FUN = function(a) {
+  den <- L2_Mat[aa == a, density(Blockade, adjust = 5)]
+  SD <- L2_Mat[aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+aaBlockade$amino_acid <- plyr::mapvalues(aaBlockade$aa, names(Biostrings::AMINO_ACID_CODE), Biostrings::AMINO_ACID_CODE)
+```
+
+```{r}
+L2_Mat <- lapply(L2_Files, fread)
+names(L2_Mat) <- gsub("_Signal1_Mainly_L2.txt", "", basename(L2_Files))
+L2_Mat <- lapply(L2_Mat, function(x) x[sample(.N, 20), ])
+```
+
+```{r}
+Plot_data <- lapply(1:20, function(i) {
+  Ai <- L2_Mat[[i]]
+  Si <- mclapply(seq_len(nrow(Ai)), function (j) {
+    Si <- Ai[j, ]
+    abf <- readRDS(paste0("./analysis/11.SignalIdentification/Dec27/ABF_", as.character(Si[, file_name]), ".Rds"))
+    current <- abf[Time >= Si[, StartTime] - 0.001 & Time <= Si[, EndTime] + 0.001]
+    current[, Scaled_pA := pA / Si$BaseMean]
+    return(current)
+  }, mc.cores = 10)
+  Si <- data.table(ID = rep(Ai[, ID], mapply(nrow, Si)), do.call(rbind, Si))
+  data.table(amino_acid = names(L2_Mat)[i], Si)
+})
+```
+
+```{r fig.width=20, fig.height=1.5}
+ggplot(Plot_data[[1]], aes(x = Time, y = Scaled_pA)) + 
+  geom_line() + 
+  geom_hline(yintercept = AABlockade[amino_acid == Plot_data[[1]][, unique(amino_acid)], 1- Blockade], colour = 2, lty = 2) + 
+  geom_hline(yintercept = aaBlockade[amino_acid == Plot_data[[1]][, unique(amino_acid)], 1- x], colour = 2, lty = 1) + 
+  scale_y_continuous(n.breaks = 5) +
+  facet_wrap(~ ID, nrow = 1, scales = "free_x") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        strip.text = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.grid.major.x = element_blank()) + 
+  labs(y = Plot_data[[1]][, unique(amino_acid)])
+```
+
+```{r fig.width=20, fig.height=20}
+Ps2 <- lapply(1:20, function(i) {
+  ggplot(Plot_data[[i]], aes(x = Time, y = Scaled_pA)) + 
+    geom_line() + 
+    geom_hline(yintercept = AABlockade[amino_acid == Plot_data[[i]][, unique(amino_acid)], 1- Blockade], colour = 2, lty = 2) + 
+    geom_hline(yintercept = aaBlockade[amino_acid == Plot_data[[i]][, unique(amino_acid)], 1- x], colour = 2, lty = 1) + 
+    scale_y_continuous(n.breaks = 5) +
+    facet_wrap(~ ID, nrow = 1, scales = "free_x") + 
+    theme_bw(base_size = 15) + 
+    theme(axis.title.x = element_blank(), 
+          axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(), 
+          strip.text = element_blank(), 
+          panel.grid.minor = element_blank(), 
+          panel.grid.major.x = element_blank()) + 
+    labs(y = Plot_data[[i]][, unique(amino_acid)])
+})
+```
+
+```{r fig.width=20, fig.height=20}
+cowplot::plot_grid(plotlist = Ps2, ncol = 1, align = "hv")
+ggsave("./analysis/12.SignalFiltering/Dec28/Filter2/Plot/Sample_L2.pdf", width = 15, height = 20)
+```
+

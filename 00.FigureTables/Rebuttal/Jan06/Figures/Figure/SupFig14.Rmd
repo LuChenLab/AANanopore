@@ -1,0 +1,65 @@
+---
+title: "Supplementary Figure 14"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+tracedata <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig14.xlsx", 1))
+labeldata <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig14.xlsx", 2))
+tracedata[, Concentration := factor(Concentration, levels = c("0.25 μM", "1 μM", "4 μM"))]
+labeldata[, Concentration := factor(Concentration, levels = c("0.25 μM", "1 μM", "4 μM"))]
+```
+
+```{r fig.width=17, fig.height=7}
+ggplot(tracedata, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = labeldata, aes(x = Time, y = 1.08, label = A), direction = "y") + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  scale_y_continuous(limits = c(0.5, 1.1)) + 
+  facet_wrap(~ Concentration, ncol = 1) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude") + 
+  theme_bw(base_size = 17) + 
+  theme(panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        strip.background = element_blank(), 
+        strip.text = element_text(hjust = 0), 
+        plot.background = element_blank()) -> p
+p
+```
+
+```{r fig.width=17, fig.height=7}
+grDevices::cairo_pdf("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/SupFig14.pdf", width = 17, height = 7)
+print(p)
+dev.off()
+```
+
+

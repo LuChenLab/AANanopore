@@ -1,0 +1,359 @@
+---
+title: "Figure 4"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+# D
+
+```{r}
+abf_i <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4D.xlsx", 1))
+RaeSig <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4D.xlsx", 2))
+```
+
+```{r fig.height=3, fig.width=5, echo=FALSE}
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text_repel(data = RaeSig, aes(x, y, label = label), size = 5, direction = "y") + 
+  scale_x_continuous(breaks = c(abf_i[, min(Time)], abf_i[, min(Time)] + 0.1), labels = c(0, 0.1), expand = c(0, 0)) + 
+  scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(y = "Normalized current amplitude", x = "Time (s)") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black")) -> pb
+pb
+```
+
+# E
+
+```{r}
+abf_i <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4E.xlsx", 1))
+RaeSig <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4E.xlsx", 2))
+```
+
+```{r fig.height=3, fig.width=5, echo=FALSE}
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = RaeSig, aes(x, y, label = label), size = 5) + 
+  scale_x_continuous(breaks = c(abf_i[, min(Time)], abf_i[, min(Time)] + 0.1), labels = c(0, 0.1), expand = c(0, 0)) + 
+  scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(y = "Normalized current amplitude", x = "Time (s)") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black")) -> pe
+pe
+```
+
+# F 
+
+```{r}
+abf_i <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4F.xlsx", 1))
+RaeSig <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4F.xlsx", 2))
+```
+
+```{r fig.height=3, fig.width=12, echo=FALSE}
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text_repel(data = RaeSig, aes(x, y, label = label), size = 5, direction = "y") + 
+  scale_x_continuous(breaks = c(abf_i[, min(Time)], abf_i[, min(Time)] + 0.1), labels = c(0, 0.1), expand = c(0, 0)) + 
+  scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(y = "Normalized current amplitude", x = "Time (s)") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black")) -> ph
+ph
+```
+
+
+
+# G
+
+```{r}
+Sigs <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4G.xlsx"))
+Sigs[, AminoAcid := factor(AminoAcid, levels = c("S", "P-S", "P-S + S"))]
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[AminoAcid != "P-S + S"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = AminoAcid, alpha = Density)) + 
+  geom_point() + 
+  scale_y_log10(limits = c(0.3, 50), breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AminoAcid, ncol = 1, strip.position = "right", scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_stata() + 
+  scale_x_continuous(limits = c(0.1, 0.35)) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+p1
+```
+
+
+```{r}
+SPTM <- Sigs[AminoAcid == "P-S + S" & Blockade > 0.1 & Blockade < 0.35]
+SPTM[, A := ifelse(Blockade < 0.2, "S", "P-S")]
+SPTM[, D := NULL]
+SPTM <- split(SPTM, SPTM$A)
+SPTM <- lapply(SPTM, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+SPTM <- do.call(rbind, SPTM)
+SPTM[, A := factor(A, levels = c("S", "P-S"))]
+```
+
+```{r}
+ggplot(SPTM[sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = A)) + 
+  ggforce::geom_mark_ellipse(aes(colour = A, label = A, filter = D > 0.1), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight", label.fontsize = 18, size = 0) + 
+  scale_y_log10(limits = c(0.3, 50), breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AminoAcid, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_stata() + 
+  scale_x_continuous(limits = c(0.1, 0.35), n.breaks = 3) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.position = "none") -> p2
+p2
+```
+
+```{r fig.height=9, fig.width=5, echo=FALSE}
+design <- "
+  1
+  1
+  2
+"
+p1 + p2 + 
+  plot_layout(design = design)
+```
+
+
+# H
+
+
+```{r}
+Sigs <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4H.xlsx"))
+Sigs[, AminoAcid := factor(AminoAcid, levels = c("K", "AcK", "AcK + K"))]
+```
+
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[AminoAcid != "AcK + K"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = AminoAcid, alpha = Density)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AminoAcid, ncol = 1, strip.position = "right", scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p3
+p3
+```
+
+
+```{r}
+AcKK <- Sigs[AminoAcid == "AcK + K"]
+AcKK[, A := ifelse(Blockade < 0.2, "K", "AcK")]
+AcKK[, D := NULL]
+AcKK <- split(AcKK, AcKK$A)
+AcKK <- lapply(AcKK, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+AcKK <- do.call(rbind, AcKK)
+AcKK[, A := factor(A, levels = c("K", "AcK"))]
+```
+
+```{r}
+ggplot(AcKK[sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = A)) + 
+  ggforce::geom_mark_ellipse(aes(colour = A, label = A, filter = D > 0.1), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight", label.fontsize = 18, size = 0) + 
+  scale_y_log10(limits = c(0.1, 30), breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AminoAcid, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 3) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.position = "none") -> p4
+p4
+```
+
+
+```{r fig.height=9, fig.width=6, echo=FALSE}
+design <- "
+  1
+  1
+  2
+"
+p3 + p4 + 
+  plot_layout(design = design)
+```
+
+
+
+# I
+
+```{r}
+Sigs <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig4I.xlsx", 1))
+Sigs[, Group := factor(Group, levels = c("C", "CMC", "CMC + C"))]
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[Group != "CMC + C"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Group, alpha = Density)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(1, 10, 100, 1000)) + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ Group, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_economist() + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p5
+p5
+```
+
+
+```{r}
+CMCC2 <- Sigs[Group == "CMC + C"]
+```
+
+```{r}
+ggplot(Sigs[Group == "CMC + C" & Blockade < 0.3][sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = Density)) + 
+  geom_point(aes(colour = AminoAcid)) + 
+  scale_y_log10(breaks = c(1, 10, 100, 1000)) + 
+  facet_wrap(~ Group, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  ggforce::geom_mark_ellipse(aes(colour = AminoAcid, label = AminoAcid, filter = Density > 0.05), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight", label.fontsize = 18, size = 0) + 
+  scale_colour_economist(guide = guide_legend(reverse = T, nrow = 2)) + 
+  scale_alpha(guide = "none") + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 3) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.title = element_blank(), 
+        # legend.position = c(0.2, 0.8), 
+        legend.position = "none", 
+        legend.background = element_blank()) -> p6
+p6
+```
+
+
+```{r fig.height=9, fig.width=6, echo=FALSE}
+design <- "
+  1
+  1
+  2
+"
+p5 + p6 + 
+  plot_layout(design = design)
+```
+
+
+
+
+# Merge
+
+
+
+```{r fig.height=13, fig.width=22, echo=FALSE}
+design <- "
+  789
+  789
+  135
+  135
+  246
+"
+p1 + p2 + p3 + p4 + p5 + p6 + pb + pe + ph + 
+  plot_layout(design = design)
+# ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig4.pdf", width = 17, height = 12)
+```
+
+
+```{r fig.height=13, fig.width=22, echo=FALSE}
+grDevices::cairo_pdf("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig4.pdf", width = 22, height = 13)
+p1 + p2 + p3 + p4 + p5 + p6 + pb + pe + ph + 
+  plot_layout(design = design)
+dev.off()
+```
+

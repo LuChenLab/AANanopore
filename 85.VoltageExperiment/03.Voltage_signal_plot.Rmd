@@ -1,0 +1,123 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/85.VoltageExperiment/02.SignalsDistance", "select_sigs.txt", recursive = T, full.names = T)
+sig0 <- do.call(rbind, lapply(files, fread))
+sig0[, voltage := factor(voltage, levels = c(50, 75, 100))]
+sig0[, amino_acid := factor(amino_acid, levels = c("Arg", "Lys", "Asp", "Glu", "Leu", "Thr", "Trp"))]
+```
+
+```{r fig.width=20, fig.height=9}
+ggplot(sig0, aes(x = Blockade, y = DwellTime, colour = amino_acid)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  facet_grid(voltage ~ amino_acid, scales = "free") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none", 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+```{r}
+ggplot(sig0, aes(x = amino_acid, y = DwellTime * 1000, colour = voltage)) + 
+  geom_violin() + 
+  geom_boxplot(position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+```{r}
+ggplot(sig0, aes(x = amino_acid, y = Blockade, colour = voltage)) + 
+  geom_violin() + 
+  geom_boxplot(position = position_dodge(width = 0.9)) + 
+  # labs(y = "Dwell time (ms)") + 
+  scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+```{r}
+files <- list.files("./analysis/85.VoltageExperiment/02.SignalsDistance", "IntervalTime.txt", recursive = T, full.names = T)
+time0 <- do.call(rbind, lapply(files, fread))
+time0 <- merge(merge(time0, sig0[, .(ID, amino_acid, voltage)], by.x = "SigAfter", by.y = "ID"), sig0[, .(ID, amino_acid, voltage)], by.x = "SigBefore", by.y = "ID")
+time0 <- time0[amino_acid.x == amino_acid.y]
+time0 <- time0[voltage.x == voltage.y]
+time0[, amino_acid.y := NULL]
+time0[, voltage.y := NULL]
+setnames(time0, "amino_acid.x", "amino_acid")
+setnames(time0, "voltage.x", "voltage")
+time0[, voltage := factor(voltage, levels = c(50, 75, 100))]
+time0[, amino_acid := factor(amino_acid, levels = c("Arg", "Lys", "Asp", "Glu", "Leu", "Thr", "Trp"))]
+```
+
+```{r}
+ggplot(time0, aes(x = amino_acid, y = Time2 * 1000, colour = voltage)) + 
+  geom_violin() + 
+  geom_boxplot(position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)") + 
+  scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+

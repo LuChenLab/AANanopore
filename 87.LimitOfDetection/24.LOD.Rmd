@@ -1,0 +1,936 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(ggpubr)
+library(dplyr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+names(aa_cols) <- plyr::mapvalues(names(aa_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+# Gly 
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/AtandardAA_LOD.xlsx", sheet = 1))
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, concentration2 := paste(concentration, "μM")]
+```
+
+```{r}
+Gly_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Gly_All[, A := as.character(A)]
+Gly_All <- merge(meta[, .(file_id, concentration, concentration2)], Gly_All, by.x = "file_id", by.y = "A")
+Gly_All <- Gly_All[concentration < 100]
+Gly_All[, concentration2 := factor(concentration2, levels = Gly_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+ggplot(Gly_All, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(colour = aa_cols["G"]) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 2) + 
+  facet_wrap(~ factor(concentration2), nrow = 1) + 
+  labs(y = "Dwell time (ms)", tag = "a") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank(), plot.tag = element_text(face = "bold", size = 20)) -> p1
+p1
+```
+
+
+
+```{r}
+Arg_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Arg_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Arg_All[, A := as.character(A)]
+Arg_All <- merge(meta[, .(file_id, concentration, concentration2)], Arg_All, by.x = "file_id", by.y = "A")
+Arg_All[, concentration2 := factor(concentration2, levels = Arg_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+ggplot(Arg_All, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(colour = aa_cols["R"]) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 2) + 
+  facet_wrap(~ factor(concentration2), nrow = 1) + 
+  labs(y = "Dwell time (ms)", tag = "b") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank(), plot.tag = element_text(face = "bold", size = 20)) -> p2
+p2
+```
+
+
+
+
+```{r}
+Asp_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Asp_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Asp_All[, A := as.character(A)]
+Asp_All <- merge(meta[, .(file_id, concentration, concentration2)], Asp_All, by.x = "file_id", by.y = "A")
+Asp_All[, concentration2 := factor(concentration2, levels = Asp_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+ggplot(Asp_All, aes(x = Blockade, y = DwellTime)) + 
+  geom_point(colour = aa_cols["D"]) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 2) + 
+  facet_wrap(~ factor(concentration2), nrow = 1) + 
+  labs(y = "Dwell time (ms)", tag = "c") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank(), plot.tag = element_text(face = "bold", size = 20)) -> p3
+p3
+```
+
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Gly_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Gly_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Gly_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Gly_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Gly_All_Sig_Freq[, Freq := N / ValidTime]
+Gly_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Gly_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Arg_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Arg_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Arg_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Arg_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Arg_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Arg_All_Sig_Freq[, Freq := N / ValidTime]
+Arg_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Arg_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Asp_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Asp_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Asp_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Asp_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Asp_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Asp_All_Sig_Freq[, Freq := N / ValidTime]
+Asp_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Asp_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+
+```{r}
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_sd", colour = aa_cols["G"]) + 
+  geom_smooth(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F, colour = "grey") + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")")) +
+  stat_cor(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Gly") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p4
+p4
+```
+
+```{r}
+ggplot() + 
+  stat_summary(data = Arg_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_sd", colour = aa_cols["R"]) + 
+  geom_smooth(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F, colour = "grey") + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")")) +
+  stat_cor(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Arg") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p5
+p5
+```
+
+```{r}
+ggplot() + 
+  stat_summary(data = Asp_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_sd", colour = aa_cols["D"]) + 
+  geom_smooth(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F, colour = "grey") + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")")) +
+  stat_cor(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Asp") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p6
+p6
+```
+
+
+```{r fig.width=12, fig.height=10}
+p1 + p2 + p3 + p4 + p5 + p6 + plot_layout(ncol = 2, byrow = F, widths = c(1.5, 1))
+```
+
+```{r}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P1.pdf", width = 12, height = 10)
+p1 + p2 + p3 + p4 + p5 + p6 + plot_layout(ncol = 2, byrow = F, widths = c(1.5, 1))
+dev.off()
+```
+
+# DwellTime
+
+```{r}
+Sig_All <- rbind(data.table(A = "Asp", Asp_All), data.table(A = "Arg", Arg_All), data.table(A = "Gly", Gly_All))
+Sig_All[, A := factor(A, levels = c("Gly", "Arg", "Asp"))]
+```
+
+```{r fig.width=9, fig.height=3}
+colos <- aa_cols[c("G", "R", "D")]
+names(colos) <- c("Gly", "Arg", "Asp")
+ggplot(Sig_All[SignalCurrentPercent > 80], aes(x = concentration2, y = DwellTime)) + 
+  stat_boxplot(aes(colour = A)) + 
+  scale_y_log10() + 
+  stat_compare_means(label.y.npc = 0.98) + 
+  facet_wrap(~ A, scales = "free_x") + 
+  scale_colour_manual(values = colos) + 
+  labs(x = "Concentration (μM)", y = "Dwell time (ms)") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.background = element_blank()) 
+```
+
+
+```{r}
+ggplot(Sig_All[SignalCurrentPercent > 80 & A == "Gly"], aes(x = concentration2, y = log10(DwellTime))) + 
+  stat_boxplot(aes(colour = A)) + 
+  # scale_y_log10() + 
+  stat_compare_means(label.y.npc = 0.98) + 
+  facet_wrap(~ A, scales = "free_x") + 
+  scale_colour_manual(values = colos) + 
+  labs(x = "Concentration (μM)", y = "Dwell time (ms)") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.background = element_blank()) 
+```
+
+
+```{r fig.width=9, fig.height=3}
+colos <- aa_cols[c("G", "R", "D")]
+names(colos) <- c("Gly", "Arg", "Asp")
+ggplot(Sig_All, aes(x = concentration2, y = Blockade)) + 
+  stat_boxplot(aes(colour = A)) + 
+  stat_compare_means(label.y.npc = 0.98) + 
+  facet_wrap(~ A, scales = "free_x") + 
+  scale_colour_manual(values = colos) + 
+  labs(x = "Concentration (μM)", y = "Blockade") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.background = element_blank()) 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+Sig_All_DwellTime <- Sig_All[SignalCurrentPercent > 80, .(Mean = mean(DwellTime), Median = median(DwellTime)), .(A, file_id, concentration, concentration2)]
+Sig_All_DwellTime_Gly <- Sig_All_DwellTime[A == "Gly"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Gly, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["G"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Dwell time (ms)") +
+  stat_cor(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Gly") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p11
+```
+
+```{r}
+Sig_All_DwellTime_Arg <- Sig_All_DwellTime[A == "Arg"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Arg, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["R"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Dwell time (ms)") +
+  stat_cor(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Arg") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p12
+```
+
+```{r}
+Sig_All_DwellTime_Asp <- Sig_All_DwellTime[A == "Asp"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Asp, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["D"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Dwell time (ms)") +
+  stat_cor(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Asp") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p13
+```
+
+```{r fig.width=12, fig.height=4}
+p11 + p12 + p13
+```
+
+```{r}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P2.pdf", width = 12, height = 4)
+p11 + p12 + p13
+dev.off()
+```
+
+
+
+
+
+
+```{r}
+Sig_All_DwellTime <- Sig_All[SignalCurrentPercent > 80, .(Mean = mean(DwellTime), Median = mean(Blockade)), .(A, file_id, concentration, concentration2)]
+Sig_All_DwellTime_Gly <- Sig_All_DwellTime[A == "Gly"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Gly, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["G"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Blockade") +
+  stat_cor(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Gly[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Gly") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p21
+
+Sig_All_DwellTime_Arg <- Sig_All_DwellTime[A == "Arg"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Arg, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["R"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Blockade") +
+  stat_cor(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Arg[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Arg") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p22
+
+Sig_All_DwellTime_Asp <- Sig_All_DwellTime[A == "Asp"]
+ggplot() + 
+  stat_summary(data = Sig_All_DwellTime_Asp, aes(x = concentration, y = Median), fun.data = "mean_sd", colour = aa_cols["D"]) + 
+  geom_smooth(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), method = "lm", se = F, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = "Blockade") +
+  stat_cor(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], aes(x = concentration, y = Median), size = 5) + 
+  stat_regline_equation(data = Sig_All_DwellTime_Asp[, .(Median = mean(Median)), concentration], 
+                        aes(x = concentration, y = Median, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y.npc = 0.8, size = 5) + 
+  facet_wrap(~ "Asp") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> p23
+```
+
+```{r fig.width=14, fig.height=4}
+p21 + p22 + p23
+```
+
+```{r fig.width=14, fig.height=4}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P3.pdf", width = 12, height = 4)
+p21 + p22 + p23
+dev.off()
+```
+
+
+# Trace plot
+
+## Gly
+
+```{r}
+Sig_All[A == "Gly", .N, .(file_id, concentration)][order(concentration)]
+```
+
+
+```{r}
+abf_Gly_L <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231023_0002.Rds")
+abf_Gly_M <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231025_0010.Rds")
+abf_Gly_H <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231022_0007.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "20231023_0002.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+```
+
+```{r fig.width=14, fig.height=3}
+t <- ts[14] # 294
+# t <- ts[16]
+L01 <- MainRidge(x = abf_Gly_L[ceiling(Time) == 294, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Gly_L[ceiling(Time) == 294, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:3]
+si <- data.table(StartTime = abf_Gly_L[ceiling(Time) == 294][si$start, Time], EndTime = abf_Gly_L[ceiling(Time) == 294][si$end, Time], A = "Gly")
+ggplot(abf_Gly_L[ceiling(Time) == 294], aes(x = Time, y = pA / L01)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(breaks = c(294 - 1, 294 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "0.1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg1
+pg1
+```
+
+```{r fig.width=14, fig.height=3}
+abf_G_L <- abf_Gly_L[ceiling(Time) == 294]
+si[, StartTime := StartTime - min(abf_G_L$Time)]
+si[, EndTime := EndTime - min(abf_G_L$Time)]
+abf_G_L$Time <- abf_G_L$Time - min(abf_G_L$Time)
+abf_G_L[, mV := NULL]
+abf_G_L[, Sm := NULL]
+abf_G_L[, pA := pA / L01]
+
+
+ggplot(abf_G_L, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "0.1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_G_L, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Gly_Low_trace.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "20231025_0010.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "20231025_0010.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[1] # 396
+L02 <- MainRidge(x = abf_Gly_M[ceiling(Time) == 396, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Gly_M[ceiling(Time) == 396, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:3]
+si <- data.table(StartTime = abf_Gly_L[ceiling(Time) == 396][si$start, Time], EndTime = abf_Gly_L[ceiling(Time) == 396][si$end, Time], A = "Gly")
+ggplot(abf_Gly_M[ceiling(Time) == 396], aes(x = Time, y = pA / L02)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(breaks = c(396 - 1, 396 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "2 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg2
+pg2
+```
+
+```{r fig.width=14, fig.height=3}
+abf_G_M <- abf_Gly_M[ceiling(Time) == 396]
+si[, StartTime := StartTime - min(abf_G_M$Time)]
+si[, EndTime := EndTime - min(abf_G_M$Time)]
+abf_G_M$Time <- abf_G_M$Time - min(abf_G_M$Time)
+abf_G_M[, mV := NULL]
+abf_G_M[, Sm := NULL]
+abf_G_M[, pA := pA / L02]
+
+
+ggplot(abf_G_M, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "2 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_G_M, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Gly_Mid_trace.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "20231022_0007.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "20231022_0007.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[3] # 751
+L03 <- MainRidge(x = abf_Gly_H[ceiling(Time) == 751, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Gly_H[ceiling(Time) == 751, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:8]
+si <- data.table(StartTime = abf_Gly_H[ceiling(Time) == 751][si$start, Time], EndTime = abf_Gly_L[ceiling(Time) == 751][si$end, Time], A = "Gly")
+si <- si[order(StartTime)][1:7]
+ggplot(abf_Gly_H[ceiling(Time) == 751], aes(x = Time, y = pA / L03)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(breaks = c(751 - 1, 751 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "50 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg3
+pg3
+```
+
+```{r fig.width=14, fig.height=3}
+abf_G_H <- abf_Gly_H[ceiling(Time) == 751]
+si[, StartTime := StartTime - min(abf_G_H$Time)]
+si[, EndTime := EndTime - min(abf_G_H$Time)]
+abf_G_H$Time <- abf_G_H$Time - min(abf_G_H$Time)
+abf_G_H[, mV := NULL]
+abf_G_H[, Sm := NULL]
+abf_G_H[, pA := pA / L03]
+
+ggplot(abf_G_H, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "50 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_G_H, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Gly_Hih_trace.Rds")
+```
+
+
+
+```{r}
+pg1 <- pg1 + theme(axis.title.x = element_blank())
+pg2 <- pg2 + theme(axis.title.x = element_blank())
+```
+
+```{r fig.width=16, fig.height=8}
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+```
+
+```{r fig.width=16, fig.height=8}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P4.pdf", width = 16, height = 8)
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+dev.off()
+```
+
+
+
+## Arg
+
+```{r}
+Sig_All[A == "Arg", .N, .(file_id, concentration)][order(concentration)]
+```
+
+
+```{r}
+abf_Arg_L <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21126014.Rds")
+abf_Arg_M <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231025_0017.Rds")
+abf_Arg_H <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231025_0019.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "21126014.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "21126014.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=14, fig.height=3}
+t <- ts[1] # 39
+L01 <- MainRidge(x = abf_Arg_L[ceiling(Time) == 39, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+ggplot(abf_Arg_L[ceiling(Time) == 39], aes(x = Time, y = pA / L01)) + 
+  geom_step() + 
+  geom_text(data = Sig_All[file_id == "21126014.1" & ceiling(StartTime) == 39], aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(breaks = c(39 - 1, 39 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.6, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg1
+pg1
+```
+
+```{r fig.width=14, fig.height=3}
+abf_R_L <- abf_Arg_L[ceiling(Time) == 39]
+si <- Sig_All[file_id == "21126014.1" & ceiling(StartTime) == 39]
+si[, StartTime := StartTime - min(abf_R_L$Time)]
+si[, EndTime := EndTime - min(abf_R_L$Time)]
+abf_R_L$Time <- abf_R_L$Time - min(abf_R_L$Time)
+abf_R_L[, mV := NULL]
+abf_R_L[, Sm := NULL]
+abf_R_L[, pA := pA / L01]
+
+ggplot(abf_R_L, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_R_L, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Low_trace.Rds")
+```
+
+
+```{r}
+ts <- Sig_All[file_id == "20231025_0017.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "20231025_0017.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[2] # 343
+L02 <- MainRidge(x = abf_Arg_M[ceiling(Time) == 343, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Arg_M[ceiling(Time) == 343, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:4]
+si <- data.table(StartTime = abf_Arg_M[ceiling(Time) == 343][si$start, Time], EndTime = abf_Arg_M[ceiling(Time) == 343][si$end, Time], A = "Arg")
+ggplot(abf_Arg_M[ceiling(Time) == 343], aes(x = Time, y = pA / L02)) + 
+  geom_step() + 
+  geom_text_repel(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A), direction = "y") + 
+  scale_x_continuous(breaks = c(343 - 1, 343 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.6, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "4 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg2
+pg2
+```
+
+
+```{r fig.width=14, fig.height=3}
+abf_R_M <- abf_Arg_M[ceiling(Time) == 343]
+si[, StartTime := StartTime - min(abf_R_M$Time)]
+si[, EndTime := EndTime - min(abf_R_M$Time)]
+abf_R_M$Time <- abf_R_M$Time - min(abf_R_M$Time)
+abf_R_M[, mV := NULL]
+abf_R_M[, Sm := NULL]
+abf_R_M[, pA := pA / L02]
+
+ggplot(abf_R_M, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_R_M, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Med_trace.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "20231025_0019.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "20231025_0019.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[1] # 878
+L03 <- MainRidge(x = abf_Arg_H[ceiling(Time) == 878, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Arg_H[ceiling(Time) == 878, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:10]
+si <- data.table(StartTime = abf_Arg_H[ceiling(Time) == 878][si$start, Time], EndTime = abf_Arg_H[ceiling(Time) == 878][si$end, Time], A = "Arg")
+ggplot(abf_Arg_H[ceiling(Time) == 878], aes(x = Time, y = pA / L03)) + 
+  geom_step() + 
+  geom_text_repel(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A), direction = "y") + 
+  scale_x_continuous(breaks = c(878 - 1, 878 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.6, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "16 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg3
+pg3
+```
+
+```{r fig.width=14, fig.height=3}
+abf_R_H <- abf_Arg_H[ceiling(Time) == 878]
+si[, StartTime := StartTime - min(abf_R_H$Time)]
+si[, EndTime := EndTime - min(abf_R_H$Time)]
+abf_R_H$Time <- abf_R_H$Time - min(abf_R_H$Time)
+abf_R_H[, mV := NULL]
+abf_R_H[, Sm := NULL]
+abf_R_H[, pA := pA / L03]
+
+ggplot(abf_R_H, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_R_H, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Arg_Hig_trace.Rds")
+```
+
+```{r}
+pg1 <- pg1 + theme(axis.title.x = element_blank())
+pg2 <- pg2 + theme(axis.title.x = element_blank())
+```
+
+```{r fig.width=16, fig.height=8}
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+```
+
+```{r fig.width=16, fig.height=8}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P5.pdf", width = 16, height = 8)
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+dev.off()
+```
+
+
+
+## Asp
+
+```{r}
+Sig_All[A == "Asp", .N, .(file_id, concentration)][order(concentration)]
+```
+
+
+```{r}
+abf_Asp_L <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21125013.Rds")
+abf_Asp_M <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21125015.Rds")
+abf_Asp_H <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21125018.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "21125013.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "21125013.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=14, fig.height=3}
+t <- ts[9] # 83
+L01 <- MainRidge(x = abf_Asp_L[ceiling(Time) == 83, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+si <- as.data.table(IRanges(abf_Asp_L[ceiling(Time) == 83, pA / L01 < 0.9]))
+si <- si[order(width, decreasing = T)][1:3]
+si <- data.table(StartTime = abf_Asp_L[ceiling(Time) == 83][si$start, Time], EndTime = abf_Asp_L[ceiling(Time) == 83][si$end, Time], A = "Asp")
+ggplot(abf_Asp_L[ceiling(Time) == 83], aes(x = Time, y = pA / L01)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.6, label = A), direction = "y") + 
+  scale_x_continuous(breaks = c(83 - 1, 83 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.5, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "0.25 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg1
+pg1
+```
+
+```{r fig.width=14, fig.height=3}
+abf_D_L <- abf_Asp_L[ceiling(Time) == 83]
+si[, StartTime := StartTime - min(abf_D_L$Time)]
+si[, EndTime := EndTime - min(abf_D_L$Time)]
+abf_D_L$Time <- abf_D_L$Time - min(abf_D_L$Time)
+abf_D_L[, mV := NULL]
+abf_D_L[, Sm := NULL]
+abf_D_L[, pA := pA / L01]
+
+ggplot(abf_D_L, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_D_L, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Asp_Low_trace.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "21125015.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "21125015.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[2] # 404
+# t <- ts[15]
+L02 <- MainRidge(x = abf_Asp_M[ceiling(Time) == 404, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+ggplot(abf_Asp_M[ceiling(Time) == 404], aes(x = Time, y = pA / L02)) + 
+  geom_step() + 
+  geom_text(data = Sig_All[file_id == "21125015.1" & ceiling(StartTime) == 404], aes(x = StartTime + (EndTime - StartTime)/2, y = .6, label = A)) + 
+  scale_x_continuous(breaks = c(404 - 1, 404 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.5, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg2
+pg2
+```
+
+```{r fig.width=14, fig.height=3}
+abf_D_M <- abf_Asp_M[ceiling(Time) == 404]
+si <- Sig_All[file_id == "21125015.1" & ceiling(StartTime) == 404]
+si[, StartTime := StartTime - min(abf_D_M$Time)]
+si[, EndTime := EndTime - min(abf_D_M$Time)]
+abf_D_M$Time <- abf_D_M$Time - min(abf_D_M$Time)
+abf_D_M[, mV := NULL]
+abf_D_M[, Sm := NULL]
+abf_D_M[, pA := pA / L02]
+
+ggplot(abf_D_M, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_D_M, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Asp_Med_trace.Rds")
+```
+
+```{r}
+ts <- Sig_All[file_id == "21125018.1", .N, ceiling(StartTime)][order(N, decreasing = T), ceiling]
+Sig_All[file_id == "21125018.1", .N, ceiling(StartTime)][order(N, decreasing = T),]
+```
+
+```{r fig.width=12, fig.height=3}
+t <- ts[3] # 697
+# t <- ts[7]
+# t <- ts[24]
+L03 <- MainRidge(x = abf_Asp_H[ceiling(Time) == 697, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+ggplot(abf_Asp_H[ceiling(Time) == 697], aes(x = Time, y = pA / L03)) + 
+  geom_step() + 
+  geom_text(data = Sig_All[file_id == "21125018.1" & ceiling(StartTime) == 697], aes(x = StartTime + (EndTime - StartTime)/2, y = .6, label = A)) + 
+  scale_x_continuous(breaks = c(697 - 1, 697 - 1 + 0.1), labels = c(0, 0.1), expand = c(0.0001, 0.0001)) + 
+  # scale_y_continuous(limits = c(0.5, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Standardized current", subtitle = "4 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank()) -> pg3
+pg3
+```
+
+```{r fig.width=14, fig.height=3}
+abf_D_H <- abf_Asp_H[ceiling(Time) == 697]
+si <- Sig_All[file_id == "21125018.1" & ceiling(StartTime) == 697]
+si[, StartTime := StartTime - min(abf_D_H$Time)]
+si[, EndTime := EndTime - min(abf_D_H$Time)]
+abf_D_H$Time <- abf_D_H$Time - min(abf_D_H$Time)
+abf_D_H[, mV := NULL]
+abf_D_H[, Sm := NULL]
+abf_D_H[, pA := pA / L03]
+
+ggplot(abf_D_H, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime)/2, y = 0.75, label = A)) + 
+  scale_x_continuous(limits = c(0, 1.005), expand = c(0.0001, 0.0001)) + 
+  labs(x = "Time (s)", y = "Normalized current amplitude", subtitle = "1 μM") + 
+  theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), plot.background = element_blank())
+saveRDS(list(abf_D_H, si), file = "./analysis/87.LimitOfDetection/04.PredictSignalPlot/Asp_Hig_trace.Rds")
+```
+
+```{r}
+pg1 <- pg1 + theme(axis.title.x = element_blank())
+pg2 <- pg2 + theme(axis.title.x = element_blank())
+```
+
+```{r fig.width=16, fig.height=8}
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+```
+
+```{r fig.width=16, fig.height=8}
+cairo_pdf("./analysis/87.LimitOfDetection/04.PredictSignalPlot/P6.pdf", width = 16, height = 8)
+pg1 + pg2 + pg3 + plot_layout(ncol = 1)
+dev.off()
+```
+

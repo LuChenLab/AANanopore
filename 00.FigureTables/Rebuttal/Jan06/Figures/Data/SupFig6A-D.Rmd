@@ -1,0 +1,206 @@
+---
+title: "Supplementary Figure 6 a-d"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(gridExtra)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(ggpp)
+```
+
+```{r}
+aat <- "His"
+sig1 <- lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat, full.names = T), fread)
+sig1 <- data.table(A = rep(gsub(".signal.txt", "", list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/", aat)), mapply(nrow, sig1)), do.call(rbind, sig1))
+```
+
+```{r echo=FALSE}
+ls <- levels(cut_interval(sig1[A == "His1" & State == "Sington", DwellTime], 10))
+ls <- mapply(function(x) {
+  mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+}, ls)
+ls <- as.numeric(ls)
+bin_N <- ls[as.numeric(cut_interval(sig1[A == "His1" & State == "Sington", DwellTime], 10))]
+mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+f <- function(x) exp(predict(exponential.model, list(x = x)))
+
+model_summ <- summary(exponential.model)
+coefs <- coef(exponential.model)
+A1 <- exp(coefs[1])
+t <- - 1 / coefs[2]
+half_life <- log(0.5) / coefs[2] # half-life
+half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+tab <- data.table(x = c("equation", "A1", "t1", "R-squared", "Adjusted R-squared", "half-life"), 
+                  y = c("y = A1*exp(-x/t1)", paste(round(A1, 2), "±", round(A1_Std.Error, 2)), paste(round(t, 2), "±", round(t_Std.Error, 2)), round(model_summ$r.squared, 3), round(model_summ$adj.r.squared, 3), paste(round(half_life, 2), "±", round(half_life_Std.Error, 2))))
+```
+
+```{r}
+Da <- list(mydata[, .(DwellTime = x, Count = y)], tab)
+```
+
+```{r echo=FALSE}
+ggplot(mydata, aes(x = x, y = y)) + 
+  geom_col(width = 1.9, alpha = 0.5, fill = "#1B9E77") + 
+  stat_function(fun = f, colour = "#1B9E77") + 
+  annotation_custom(tableGrob(tab, rows = NULL, cols = NULL), xmin = mydata[, max(x) * 0.5], xmax = mydata[, max(x)], ymin = mydata[, max(y) * 0.5], ymax = mydata[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank())
+```
+
+
+```{r echo=FALSE}
+ls <- levels(cut_interval(sig1[A == "His1" & State != "Sington", DwellTime], 10))
+ls <- mapply(function(x) {
+  mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+}, ls)
+ls <- as.numeric(ls)
+bin_N <- ls[as.numeric(cut_interval(sig1[A == "His1" & State != "Sington", DwellTime], 10))]
+mydata2 <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+exponential.model2 <- lm(log(y + 1) ~ x, data = mydata2)
+f2 <- function(x) exp(predict(exponential.model2, list(x = x)))
+
+model_summ <- summary(exponential.model2)
+coefs <- coef(exponential.model2)
+A1 <- exp(coefs[1])
+t <- - 1 / coefs[2]
+half_life <- log(0.5) / coefs[2] # half-life
+half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+tab2 <- data.table(x = c("equation", "A1", "t1", "R-squared", "Adjusted R-squared", "half-life"), 
+                  y = c("y = A1*exp(-x/t1)", paste(round(A1, 2), "±", round(A1_Std.Error, 2)), paste(round(t, 2), "±", round(t_Std.Error, 2)), round(model_summ$r.squared, 3), round(model_summ$adj.r.squared, 3), paste(round(half_life, 2), "±", round(half_life_Std.Error, 2))))
+```
+
+```{r}
+Db <- list(mydata2[, .(DwellTime = x, Count = y)], tab2)
+```
+
+```{r echo=FALSE}
+ggplot(mydata2, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#D95F02") + 
+  stat_function(fun = f2, colour = "#D95F02") + 
+  annotation_custom(tableGrob(tab2, rows = NULL, cols = NULL), xmin = mydata2[, max(x) * 0.5], xmax = mydata2[, max(x)], ymin = mydata2[, max(y) * 0.8], ymax = mydata2[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank())
+```
+
+```{r echo=FALSE}
+ls <- levels(cut_interval(sig1[A == "His2" & State == "Sington", DwellTime], 10))
+ls <- mapply(function(x) {
+  mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+}, ls)
+ls <- as.numeric(ls)
+bin_N <- ls[as.numeric(cut_interval(sig1[A == "His2" & State == "Sington", DwellTime], 10))]
+mydata3 <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+exponential.model3 <- lm(log(y + 1) ~ x, data = mydata3)
+f3 <- function(x) exp(predict(exponential.model3, list(x = x)))
+
+model_summ <- summary(exponential.model3)
+coefs <- coef(exponential.model3)
+A1 <- exp(coefs[1])
+t <- - 1 / coefs[2]
+half_life <- log(0.5) / coefs[2] # half-life
+half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+tab3 <- data.table(x = c("equation", "A1", "t1", "R-squared", "Adjusted R-squared", "half-life"), 
+                  y = c("y = A1*exp(-x/t1)", paste(round(A1, 2), "±", round(A1_Std.Error, 2)), paste(round(t, 2), "±", round(t_Std.Error, 2)), round(model_summ$r.squared, 3), round(model_summ$adj.r.squared, 3), paste(round(half_life, 2), "±", round(half_life_Std.Error, 2))))
+```
+
+```{r}
+Dc <- list(mydata3[, .(DwellTime = x, Count = y)], tab3)
+```
+
+```{r echo=FALSE}
+ggplot(mydata3, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#7570B3") + 
+  stat_function(fun = f3, colour = "#7570B3") + 
+  annotation_custom(tableGrob(tab3, rows = NULL, cols = NULL), xmin = mydata3[, max(x) * 0.5], xmax = mydata3[, max(x)], ymin = mydata3[, max(y) * 0.5], ymax = mydata3[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank())
+```
+
+```{r echo=FALSE}
+ls <- levels(cut_interval(sig1[A == "His2" & State != "Sington", DwellTime], 10))
+ls <- mapply(function(x) {
+  mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+}, ls)
+ls <- as.numeric(ls)
+bin_N <- ls[as.numeric(cut_interval(sig1[A == "His2" & State != "Sington", DwellTime], 10))]
+mydata4 <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+exponential.model4 <- lm(log(y + 1) ~ x, data = mydata4)
+f4 <- function(x) exp(predict(exponential.model4, list(x = x)))
+
+model_summ <- summary(exponential.model4)
+coefs <- coef(exponential.model4)
+A1 <- exp(coefs[1])
+t <- - 1 / coefs[2]
+half_life <- log(0.5) / coefs[2] # half-life
+half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+tab4 <- data.table(x = c("equation", "A1", "t1", "R-squared", "Adjusted R-squared", "half-life"), 
+                  y = c("y = A1*exp(-x/t1)", paste(round(A1, 2), "±", round(A1_Std.Error, 2)), paste(round(t, 2), "±", round(t_Std.Error, 2)), round(model_summ$r.squared, 3), round(model_summ$adj.r.squared, 3), paste(round(half_life, 2), "±", round(half_life_Std.Error, 2))))
+```
+
+```{r}
+Dd <- list(mydata4[, .(DwellTime = x, Count = y)], tab4)
+```
+
+```{r echo=FALSE}
+ggplot(mydata4, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#E7298A") + 
+  stat_function(fun = f4, colour = "#E7298A") + 
+  annotation_custom(tableGrob(tab4, rows = NULL, cols = NULL), xmin = mydata4[, max(x) * 0.5], xmax = mydata4[, max(x)], ymin = mydata4[, max(y) * 0.5], ymax = mydata4[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank())
+```
+
+```{r}
+openxlsx::write.xlsx(c(Da, Db, Dc, Dd), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx")
+```
+

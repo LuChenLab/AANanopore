@@ -1,0 +1,66 @@
+---
+title: "Figure 2 B"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+aaBlockade <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig2B.xlsx"))
+setnames(aaBlockade, "AminoAcid", "A")
+```
+
+```{r fig.height=5, fig.width=5.5}
+ggplot(aaBlockade, aes(x = Volume, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_text_repel(aes(label = A), size = 5) + 
+  stat_cor(label.x.npc = 0.2, label.y.npc = 0.01, size = 5.5, colour = "red") + 
+  theme_bw(base_size = 22) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")"), tag = "b") +
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig2B.pdf", width = 5.5, height = 5)
+```
+
+

@@ -1,0 +1,385 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ChenShanchuan/20231031/20231031.xlsx"))[, 1:8]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "base_line")
+meta <- meta[purpose == "多肽水解" & grepl("20231031_", file_name)]
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta[, sig_file := paste0("./analysis/91.RealTimeHydrolysis/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta[is.na(amino_acid), amino_acid := "blank"]
+meta
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+SigSumm <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFHL/RFmodel.Rds")
+```
+
+```{r}
+Sig_FeatureMatrixs <- mclapply(unique(meta[, file_id]), function(a) {
+  B_file <- gsub("\\.[0-9]", "", a)
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  do.call(rbind, lapply(B_file, fread))
+}, mc.cores = 20)
+Sig_FeatureMatrixs <- do.call(rbind, Sig_FeatureMatrixs)
+setkey(Sig_FeatureMatrixs, ID)
+```
+
+```{r}
+big_file <- meta[amino_acid %in% c("blank"), file_id]
+bgfile <- meta[file_id %in% big_file, sig_file]
+bgsignals <- do.call(rbind, lapply(bgfile, fread))
+bgsignals[, ID := paste0("Noise_", ID)]
+bgsignals <- data.table(bgsignals, D1 = bgsignals[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r }
+selected.signals <- do.call(rbind, lapply(list.files("./analysis/91.RealTimeHydrolysis/23.SelectedSignals", "euclidean", full.names = TRUE), fread))
+selected.signals <- data.table(selected.signals, D1 = selected.signals[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = bgsignals[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D1), size = 0.2) + 
+  geom_rect(aes(xmin = bgsignals[, min(Blockade)], xmax = 0.3, ymin = 0.35, ymax = bgsignals[, max(DwellTime)]), fill = NA, colour = "red") + 
+  scale_y_log10() + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = selected.signals[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D1), size = 0.2) + 
+  # scale_x_continuous(limits = c(0.11, 0.23)) + 
+  scale_y_log10() + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p2
+p2
+```
+
+```{r}
+stopifnot(mean(selected.signals$ID %in% Sig_FeatureMatrixs$ID) == 1)
+subtab <- Sig_FeatureMatrixs[selected.signals$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+selected.signals <- merge(selected.signals, pred1, by = "ID")
+```
+
+```{r}
+fwrite(selected.signals, "./analysis/91.RealTimeHydrolysis/24.SignalsPrediction/selected.signals_prediction.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = selected.signals[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.1, 0.3)) +
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p3
+p3
+```
+
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred1 %in% x[, .N, Pred1][N > 3, Pred1]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred1, colour = Pred1), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA, colour = AA), size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+AADensityPlot1(x = selected.signals[Prob1 > 0.7 & Delta1 > 0.5], target = AMINO_ACID_CODE[unlist(strsplit("FHL", ""))]) -> p2
+p2 <- p2 + scale_x_continuous(limits = c(0.1, 0.3))
+p2 <- p2 + theme_void() + theme(legend.position = "none", plot.margin = unit(c(1, 1, 0, 1), "line"))
+p2
+```
+
+```{r}
+p2 + p3 + plot_layout(ncol = 1, heights = c(1, 2))
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./data/ChenShanchuan/20231031/20231031.xlsx"))[, 1:8]
+colnames(meta1) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "base_line")
+meta1 <- meta1[purpose == "多肽水解" & grepl("20231031_", file_name)]
+meta1 <- meta1[, .SD[, .(sample, amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta1
+```
+
+```{r}
+selected.signals[, sigtime := StartTime + (EndTime - StartTime) / 2]
+sig1 <- selected.signals[A == "20231031_0001.1"]
+sig2 <- selected.signals[A == "20231031_0002.1"]
+sig3 <- selected.signals[A == "20231031_0003.1"]
+sig4 <- selected.signals[A == "20231031_0004.1"]
+sig5 <- selected.signals[A == "20231031_0005.1"]
+```
+
+```{r}
+sig1[, summary(sigtime)]
+sig2$sigtime <- sig2$sigtime + max(sig1$sigtime)
+sig3$sigtime <- sig3$sigtime + max(sig2$sigtime)
+sig4$sigtime <- sig4$sigtime + max(sig3$sigtime)
+sig5$sigtime <- sig5$sigtime + max(sig4$sigtime)
+sigs <- rbind(sig1, sig2, sig3, sig4, sig5)
+sigs[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+Lab <- sigs[, .(Start = min(sigtime), End = max(sigtime)), A]
+Lab[A == "20231031_0001.1", Stage := "FHL"]
+Lab[A == "20231031_0002.1", Stage := "F,H,L"]
+Lab[A == "20231031_0003.1", Stage := "F"]
+Lab[A == "20231031_0004.1", Stage := "L"]
+Lab[A == "20231031_0005.1", Stage := "H"]
+```
+
+```{r}
+F_F <- sigs[Pred1 == "F", ecdf(sigtime)]
+F_H <- sigs[Pred1 == "H", ecdf(sigtime)]
+F_L <- sigs[Pred1 == "L", ecdf(sigtime)]
+```
+
+```{r}
+slope_F <- diff(c(0, F_F(Lab$End)))/Lab[, End - Start]*1000
+slope_H <- diff(c(0, F_H(Lab$End)))/Lab[, End - Start]*1000
+slope_L <- diff(c(0, F_L(Lab$End)))/Lab[, End - Start]*1000
+slope <- rbind(data.table(AA = "F", A = Lab$A, slope = slope_F), 
+               data.table(AA = "H", A = Lab$A, slope = slope_H), 
+               data.table(AA = "L", A = Lab$A, slope = slope_L))
+slope <- merge(slope, Lab[, .(Time = Start + (End - Start) / 2), A])
+```
+
+```{r}
+slope$y <- F_L(slope$Time)
+slope[AA == "F"]
+```
+
+```{r}
+aa_cols2 <- RColorBrewer::brewer.pal(n = 3, name = "Dark2")
+# names(aa_cols2) <- plyr::mapvalues(names(aa_cols2), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+names(aa_cols2) <- c("F", "H", "L")
+```
+
+```{r}
+ggplot(sigs) +
+  stat_ecdf(aes(sigtime, colour = Pred1)) + 
+  geom_vline(xintercept = Lab[, Start], colour = "grey90") + 
+  geom_text(data = slope[AA == "F"], aes(x = Time, y = y + 0.15, label = round(slope, 3)), colour = aa_cols2["F"]) + 
+  geom_text(data = slope[AA == "H"], aes(x = Time, y = y + 0.25, label = round(slope, 3)), colour = aa_cols2["H"]) + 
+  geom_text(data = slope[AA == "L"], aes(x = Time, y = y + 0.35, label = round(slope, 3)), colour = aa_cols2["L"]) + 
+  scale_x_continuous(breaks = Lab[, Start], labels = Lab[, Stage]) + 
+  scale_colour_manual(breaks = names(aa_cols2), values = aa_cols2, guide = guide_legend(nrow = 1)) +
+  labs(x = "Recording time", y = "Cumulative distribution of signals") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p4
+p4
+```
+
+```{r fig.height=6, fig.width=12, echo=FALSE}
+design <- "
+  13
+  23
+  23
+"
+p2 + p3 + p4 + 
+  plot_layout(design = design)
+```
+
+
+```{r}
+sp_F <- diff(c(0, F_F(seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300)))) * 1000 / 300
+sp_H <- diff(c(0, F_H(seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300)))) * 1000 / 300
+sp_L <- diff(c(0, F_L(seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300)))) * 1000 / 300
+
+sp <- rbind(data.table(A = "F", x = seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300), y = sp_F), 
+            data.table(A = "H", x = seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300), y = sp_H), 
+            data.table(A = "L", x = seq(sigs[, min(sigtime)], sigs[, max(sigtime)], by = 300), y = sp_L))
+```
+
+```{r}
+ggplot(sp, aes(x = x, y = y, colour = A)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = Lab[, Start], labels = Lab[, Stage]) + 
+  scale_colour_manual(breaks = names(aa_cols2), values = aa_cols2, guide = guide_legend(nrow = 1)) +
+  labs(x = "Recording time", y = "Slope") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p5
+```
+
+
+```{r fig.height=10, fig.width=12, echo=FALSE}
+design <- "
+  13
+  13
+  23
+  24
+  24
+  24
+"
+p2 + p3 + p4 + p5 + 
+  plot_layout(design = design)
+```
+

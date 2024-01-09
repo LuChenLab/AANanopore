@@ -33,6 +33,11 @@ library(ggpubr)
 cutoffList <- readRDS(file = "analysis/03.MachineLearning/Version7/02.Modeling/01.RF/02.CompareModels/Cutoff_Recovery_Accuracy_Test.Rds")
 ```
 
+```{r}
+openxlsx::write.xlsx(cutoffList[Dataset %in% c("Validation")], 
+                     file = "./analysis/00.FigureTables/Oct23/Figure3/Fig3c.xlsx")
+```
+
 ```{r fig.width=3.5, fig.height=4}
 ggplot(cutoffList[Dataset %in% c("Validation")], aes(x = Recovery * 100, y = Accuracy * 100, colour = Model)) + 
   geom_line() + 
@@ -54,6 +59,7 @@ Preds <- readRDS(file = "analysis/03.MachineLearning/Version8/02.Modeling/01.RF/
 ```
 
 ```{r}
+library(caret)
 cM <- Preds[[4]][Dataset == "ValidationUp" & Prob > 0, confusionMatrix(pred, true)]
 cM <- as.matrix(cM$table)
 cM <- reshape2::dcast(as.data.frame(cM), Prediction ~ Reference)
@@ -61,6 +67,10 @@ cM <- data.frame(cM[, -1], row.names = cM[, 1])
 cM <- apply(cM, 2, prop.table)*100
 row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
 colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+openxlsx::write.xlsx(cM, file = "./analysis/00.FigureTables/Oct23/Figure3/Fig3d.xlsx")
 ```
 
 ```{r}
@@ -98,6 +108,10 @@ cM <- data.frame(cM[, -1], row.names = cM[, 1])
 cM <- apply(cM, 2, prop.table)*100
 row.names(cM) <- plyr::mapvalues(row.names(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
 colnames(cM) <- plyr::mapvalues(colnames(cM), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+openxlsx::write.xlsx(cM, "./analysis/00.FigureTables/Oct23/Figure3/Fig3d.xlsx")
 ```
 
 ```{r}

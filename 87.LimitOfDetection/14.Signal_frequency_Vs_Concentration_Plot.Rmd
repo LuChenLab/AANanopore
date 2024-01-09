@@ -1,0 +1,786 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+```
+
+# Arg 
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/氨基酸浓度梯度实验信息表.xlsx", sheet = 1))
+colnames(meta) <- c("file_name", "concentration", "amino_acid")
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, concentration, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/87.LimitOfDetection/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta$amino_acid <- plyr::mapvalues(meta$amino_acid, tolower(AMINO_ACID_CODE), names(AMINO_ACID_CODE))
+meta <- meta[amino_acid == "R"]
+meta[concentration == "0", amino_acid := NA]
+meta[, concentration := as.numeric(gsub(" uM", "", concentration))]
+```
+
+```{r}
+Arg_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/R.selected.signals.txt"), sep = "\t")
+Arg_All[, A := as.character(A)]
+Arg_All <- merge(meta[, .(file_id, concentration)], Arg_All, by.x = "file_id", by.y = "A")
+```
+
+```{r}
+ggplot(Arg_All, aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ factor(concentration), nrow = 1)
+```
+
+
+```{r}
+Arg_OBO <- do.call(rbind, lapply(list.files("./analysis/87.LimitOfDetection/03.SelectedSignals", "R.2", full.names = TRUE), fread))
+Arg_OBO[, A := as.character(A)]
+Arg_OBO <- merge(meta[, .(file_id, concentration)], Arg_OBO, by.x = "file_id", by.y = "A")
+Arg_OBO[, concentration := paste(concentration, "uM")]
+Arg_OBO[, concentration := factor(concentration, levels = c("1 uM", "2 uM", "4 uM", "8 uM", "16 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Arg_OBO, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  labs(y = "Dwell time (ms)", title = "Arg")
+```
+
+
+```{r}
+sig <- split(Arg_All, Arg_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Arg_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Arg_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Arg_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Arg_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Arg_All_Sig_Freq[, Freq := N / ValidTime]
+Arg_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Arg_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Arg_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_sd") + 
+  geom_smooth(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Arg") +
+  stat_cor(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 30, size = 5) + 
+  # annotate(geom = "text", 0.75, 60, label = paste0("Slope = ", Arg_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, round(coef(lm(Freq ~ concentration))[2], 2)]), size = 5) +
+  theme_base()
+```
+
+```{r}
+N = "`N = 18`"
+ggplot(data = Arg_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Arg") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 60, size = 5) + 
+  theme_base()
+```
+
+
+
+# Asp
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/氨基酸浓度梯度实验信息表.xlsx", sheet = 1))
+colnames(meta) <- c("file_name", "concentration", "amino_acid")
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, concentration, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/87.LimitOfDetection/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta$amino_acid <- plyr::mapvalues(meta$amino_acid, tolower(AMINO_ACID_CODE), names(AMINO_ACID_CODE))
+meta <- meta[amino_acid == "D"]
+meta[concentration == "0", amino_acid := NA]
+meta[concentration == "250 nM", concentration := "0.25 uM"]
+meta[concentration == "500 nM", concentration := "0.5 uM"]
+meta[, concentration := as.numeric(gsub(" uM", "", concentration))]
+```
+
+
+```{r}
+Asp_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/D.selected.signals.txt"), sep = "\t")
+Asp_All[, A := as.character(A)]
+Asp_All <- merge(meta[, .(file_id, concentration)], Asp_All, by.x = "file_id", by.y = "A")
+Asp_All[, concentration := paste(concentration, "uM")]
+Asp_All[, concentration := factor(concentration, levels = c("0.25 uM", "0.5 uM", "1 uM", "2 uM", "4 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Asp_All, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  theme(legend.position = "none") + 
+  labs(y = "Dwell time (ms)", title = "Asp")
+```
+
+```{r}
+Asp_OBO <- do.call(rbind, lapply(list.files("./analysis/87.LimitOfDetection/03.SelectedSignals", "D.2", full.names = TRUE), fread))
+Asp_OBO[, A := as.character(A)]
+Asp_OBO <- merge(meta[, .(file_id, concentration)], Asp_OBO, by.x = "file_id", by.y = "A")
+Asp_OBO[, concentration := paste(concentration, "uM")]
+Asp_OBO[, concentration := factor(concentration, levels = c("0.25 uM", "0.5 uM", "1 uM", "2 uM", "4 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Asp_OBO, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  theme(legend.position = "none") + 
+  labs(y = "Dwell time (ms)", title = "Asp")
+```
+
+```{r}
+sig <- split(Asp_All, Asp_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Asp_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Asp_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Asp_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Asp_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Asp_All_Sig_Freq[, Freq := N / ValidTime]
+Asp_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Asp_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Asp_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  scale_x_continuous(limits = c(0, 4)) + 
+  scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Asp") +
+  stat_cor(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 60, size = 5) + 
+  theme_base()
+```
+
+
+```{r}
+N = "`N = 16`"
+ggplot(data = Asp_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  scale_x_continuous(limits = c(0, 4)) + 
+  scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Asp") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 60, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+LOD <- 3 * Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, sd(Freq)] / Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, coef(lm(Freq ~ concentration))[2]]
+```
+
+```{r}
+Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, lm(Freq ~ concentration)]
+```
+
+
+```{r}
+Asp_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, lm(concentration ~ Freq)]
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Val
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231022/20231022_Val.xlsx", sheet = 1))
+meta <- meta[实验目的 == "缬氨酸浓度梯度"]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "baseline", "note")
+meta[, file_name := gsub(".abf", "", file_name)]
+meta[, concentration := gsub("V缬氨酸（", "", sample)]
+meta[, concentration := gsub("）", "", concentration)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, concentration, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/87.LimitOfDetection/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta[concentration == "100nM", concentration := "0.1 uM"]
+meta[concentration == "500nM", concentration := "0.5 uM"]
+meta[concentration == "2uM", concentration := "2 uM"]
+meta[concentration == "10uM", concentration := "10 uM"]
+meta[concentration == "50uM", concentration := "50 uM"]
+meta[, concentration := as.numeric(gsub(" uM", "", concentration))]
+```
+
+```{r}
+Val_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/V.selected.signals.txt"), sep = "\t")
+Val_All[, A := as.character(A)]
+Val_All <- merge(meta[, .(file_id, concentration)], Val_All, by.x = "file_id", by.y = "A")
+Val_All[, concentration := paste(concentration, "uM")]
+Val_All[, concentration := factor(concentration, levels = c("0.1 uM", "0.5 uM", "2 uM", "10 uM", "50 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Val_All, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  theme(legend.position = "none") + 
+  labs(y = "Dwell time (ms)", title = "Val")
+```
+
+```{r}
+sig <- split(Val_All, Val_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Val_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Val_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Val_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Val_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Val_All_Sig_Freq[, Freq := N / ValidTime]
+Val_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Val_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Val_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Val_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Val") +
+  stat_cor(data = Val_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Val_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+N = "`N = 5`"
+ggplot(data = Val_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Val") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+
+
+
+
+
+
+
+
+# Gly
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/WangZichun/20231023/20231020起实验数据记录.xlsx", sheet = 1))
+meta <- meta[grepl("浓度", 实验目的)]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "baseline", "note")
+meta[, file_name := gsub(".abf", "", file_name)]
+meta[, concentration := gsub("Gly（", "", sample)]
+meta[, concentration := gsub("）", "", concentration)]
+meta[grepl("blank", concentration), concentration := 0]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, concentration, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/87.LimitOfDetection/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta[concentration == "100nM", concentration := "0.1 μM"]
+meta[concentration == "500nM", concentration := "0.5 μM"]
+meta[, concentration := as.numeric(gsub("μM", "", concentration))]
+meta
+```
+
+```{r}
+Gly_All <- rbind(fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/G.selected.signals.WZC231022.txt"), sep = "\t"), 
+                 fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/G.selected.signals.WZC231023.txt"), sep = "\t"))
+Gly_All[, A := as.character(A)]
+Gly_All <- merge(meta[, .(file_id, concentration)], Gly_All, by.x = "file_id", by.y = "A")
+Gly_All[, concentration := paste(concentration, "uM")]
+Gly_All[, unique(concentration)]
+Gly_All[, concentration := factor(concentration, levels = c("0.1 uM", "0.5 uM", "2 uM", "10 uM", "50 uM", "500 uM", "1500 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Gly_All, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  theme(legend.position = "none") + 
+  labs(y = "Dwell time (ms)", title = "Gly")
+```
+
+```{r}
+sig <- split(Gly_All, Gly_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Gly_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Gly_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Gly_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Gly_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Gly_All_Sig_Freq[, Freq := N / ValidTime]
+Gly_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Gly_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+N = "`N = 12`"
+ggplot(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 80, size = 5) + 
+  theme_base()
+```
+
+```{r}
+N = "`N = 9`"
+ggplot(data = Gly_All_Sig_Freq[concentration < 100], aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq[concentration < 100], aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+
+
+
+# Gly
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231025/20231025_Gly.xlsx", sheet = 1))
+meta <- meta[实验目的 == "甘氨酸浓度梯度"]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "baseline", "note")
+meta[, file_name := gsub(".abf", "", file_name)]
+meta[, concentration := gsub("G甘氨酸（", "", sample)]
+meta[, concentration := gsub("）", "", concentration)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, concentration, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/87.LimitOfDetection/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+# meta[concentration == "100nM", concentration := "0.1 μM"]
+# meta[concentration == "500nM", concentration := "0.5 μM"]
+meta[, concentration := as.numeric(gsub("uM", "", concentration))]
+meta
+```
+
+```{r}
+Gly_All <- rbind(fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/G.selected.signals.WZC231022.txt"), sep = "\t"), 
+                 fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/G.selected.signals.WZC231023.txt"), sep = "\t"), 
+                 fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/G.selected.signals.CSC231025.txt"), sep = "\t"))
+Gly_All[, A := as.character(A)]
+Gly_All <- merge(meta[, .(file_id, concentration)], Gly_All, by.x = "file_id", by.y = "A")
+Gly_All[, concentration := paste(concentration, "uM")]
+Gly_All[, unique(concentration)]
+Gly_All[, concentration := factor(concentration, levels = c("0.1 uM", "0.5 uM", "2 uM", "10 uM", "50 uM", "500 uM", "1500 uM"))]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(Gly_All, aes(x = Blockade, y = DwellTime, colour = file_id)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ concentration, nrow = 1) + 
+  theme_base() + 
+  theme(legend.position = "none") + 
+  labs(y = "Dwell time (ms)", title = "Gly")
+```
+
+```{r}
+sig <- split(Gly_All, Gly_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Gly_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Gly_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Gly_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Gly_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Gly_All_Sig_Freq[, Freq := N / ValidTime]
+Gly_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Gly_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+N = "`N = 6`"
+ggplot(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 80, size = 5) + 
+  theme_base()
+```
+
+```{r}
+N = "`N = 9`"
+ggplot(data = Gly_All_Sig_Freq[concentration < 100], aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq[concentration < 100], aes(x = concentration, y = Freq), fun.data = "mean_se") + 
+  geom_smooth(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[concentration < 100, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~~~")), 
+                        label.y = 80, size = 5) + 
+  theme_base()
+```
+
+
+
+
+
+

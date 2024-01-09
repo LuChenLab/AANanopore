@@ -1,0 +1,91 @@
+---
+title: "Figure 2 D"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+IntervalTime <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig2C.xlsx"))
+setnames(IntervalTime, "AminoAcid", "AA")
+IntervalTime[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+od <- IntervalTime[, median(Frequency), .(Class, AA)][order(Class, V1), AA]
+IntervalTime[, AA := factor(AA, levels = od)]
+```
+
+```{r}
+IntervalTime[AA %in% AMINO_ACID_CODE[c("D", "E")], Property2 := "Charged(-)"]
+IntervalTime[AA %in% AMINO_ACID_CODE[c("K", "R", "H")], Property2 := "Charged(+)"]
+IntervalTime[Class != "Charged", Property2 := "Uncharged"]
+
+IntervalTime[AA %in% AMINO_ACID_CODE[c("D", "E")], Property2 := "Charged(-)"]
+IntervalTime[AA %in% AMINO_ACID_CODE[c("K", "R", "H")], Property2 := "Charged(+)"]
+IntervalTime[Class != "Charged", Property2 := Class]
+IntervalTime[, Property2 := factor(Property2, levels = c("Charged(-)", "Charged(+)", "Nonpolar", "Polar"))]
+```
+
+```{r fig.height=5, fig.width=5.5}
+my_comp <- list(c("Charged(-)", "Charged(+)"), c("Polar", "Nonpolar"))
+
+ggplot(IntervalTime, aes(x = Property2, y = Frequency, colour = Property2)) + 
+  geom_boxplot() + 
+  geom_point() + 
+  scale_y_sqrt(limits = c(0, 250), breaks = c(0, 10, 50, 100, 200)) + 
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.6, comparisons = my_comp, size = 8) + 
+  labs(x = "Amino acid", y = expression(Signal~frequency~"("*μM^"-1"*" min"^-1*")"), tag = "d") + 
+  scale_colour_manual(values = RColorBrewer::brewer.pal(n = 3, name = "Dark2")[c(1, 1, 3, 2)]) + 
+  theme_bw(base_size = 22) + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 30, hjust = 1), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig2D.pdf", width = 5.5, height = 5)
+```
+
+```{r}
+IntervalTime[Property2 %in% c("Charged(-)", "Charged(+)"), wilcox.test(Frequency ~ Property2)]
+```
+
+```{r}
+IntervalTime[Property2 %in% c("Polar", "Nonpolar"), wilcox.test(Frequency ~ Property2)]
+```
+

@@ -1,0 +1,526 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+KnnSelecting <- function(signals, dists, dist_method = "euclidean", k = 20, noise = 0) {
+  stopifnot(noise < k)
+  if(is(dists, "dist")) {
+    knn1 <- dbscan::kNN(dists, k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists, "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  } else {
+    knn1 <- dbscan::kNN(dists[[dist_method]], k = k)
+    knn2 <- apply(knn1$id, 2, function(x) x %in% which(attr(dists[[dist_method]], "Labels") %in% grep("^Noise", rownames(knn1$id), value = TRUE)))
+  }
+  
+  tu <- row.names(knn1$id)[which(rowSums(knn2) <= noise)]
+  # tu <- union(tu, knn2[which(rowSums(knn2) <= noise), 1])
+  tu <- grep("^Noise", tu, invert = TRUE, value = TRUE)
+  ggplot(signals, aes(x = Blockade, y = DwellTime, colour = !ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = c("#E41A1C", "#377EB8")) + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p1
+  ggplot(signals[ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#E41A1C") + 
+    theme_classic() + 
+    theme(legend.position = "none") + 
+    labs(title = length(tu)) -> p2
+  ggplot(signals[!ID %in% tu], aes(x = Blockade, y = DwellTime, colour = ID %in% tu)) + 
+    geom_point(size = .5) + 
+    scale_y_log10() + 
+    scale_colour_manual(values = "#377EB8") + 
+    theme_classic() + 
+    theme(legend.position = "none") -> p3
+  print(p1 + p2 + p3)
+  return(tu)
+}
+
+RemoveOutlier <- function(tree, n = 10, Keep = 0.95) {
+  h <- length(tree$height)
+  g <- cutree(tree, h = tree$height[h])
+  g <- data.table(tip = names(g), cluster = g)
+  
+  while (g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] > Keep) {
+    h <- h - 1
+    g <- cutree(tree, h = tree$height[h])
+    g <- data.table(tip = names(g), cluster = g)
+  }
+  cat(paste0("Keep: ", round(g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] * 100, 2), "%"))
+  g[cluster %in% g[, .N, cluster][N >= n, cluster], tip]
+}
+
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+meta0 <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/整理数据(20230831).xlsx", sheet = 1))
+colnames(meta0) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "base_line", "note")
+meta1 <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/整理数据(20230831).xlsx", sheet = 7))
+colnames(meta1) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "concentration", "note")
+meta <- unique(rbind(meta0[, 1:4], meta1[, 1:4]))
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/83.Hydrolyzation/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/83.Hydrolyzation/01.SelectedL0/", file_id, ".MainL0.txt")]
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+```{r}
+bgsignals0 <- do.call(rbind, lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals", "_background.txt", full.names = TRUE), fread))
+bgsignals0[, ID := paste0("Noise_", ID)]
+Big_FeatureMatrixs <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/01.SignalDistance/StandardAA_Big_FeatureMatrixs.Rds")
+Big_FeatureMatrixs <- Big_FeatureMatrixs[ID %in% bgsignals0$ID]
+Big_FeatureMatrixs[, AA := NULL]
+```
+
+# FYSL
+
+```{r}
+sig0 <- do.call(rbind, lapply(meta[amino_acid == "FYSL", sig_file], fread))
+```
+
+```{r fig.width=25, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], col = 2) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1)
+```
+
+```{r}
+sig_file <- c("21o19001.2", "21o19002.1", "21o19003.1", "21o19008.1", "21o19009.1")
+big_file <- c("21o19001.1", "21o19005.1", "21o19007.1", "21807003.2")
+```
+
+```{r}
+bgfile <- meta[file_id %in% big_file, sig_file]
+bgsignals <- do.call(rbind, lapply(bgfile, fread))[DwellTime > 0.35 & Blockade < 0.3]
+bgsignals[, ID := paste0("Noise_", ID)]
+
+B_file <- unique(meta[is.na(amino_acid) | amino_acid == "CPA", file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+Big_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+Big_FeatureMatrix[, ID := paste0("Noise_", ID)]
+Big_FeatureMatrix <- Big_FeatureMatrix[ID %in% bgsignals$ID]
+```
+
+```{r}
+sig0 <- sig0[A %in% sig_file][DwellTime > 0.35 & Blockade < 0.3]
+```
+
+```{r}
+Sig_FeatureMatrixs <- mclapply(sig_file, function(a) {
+  B_file <- gsub("\\.[0-9]", "", a)
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+  Sig_FeatureMatrix[ID %in% sig0$ID]
+}, mc.cores = length(sig_file))
+Sig_FeatureMatrixs <- do.call(rbind, Sig_FeatureMatrixs)
+Sig_FeatureMatrixs <- data.frame(Sig_FeatureMatrixs[, grepl("^X", colnames(Sig_FeatureMatrixs)) | grepl("DwellTime", colnames(Sig_FeatureMatrixs)), with = F], row.names = Sig_FeatureMatrixs[[1]])
+```
+
+```{r fig.width=25, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], col = 2) + 
+  geom_hline(yintercept = 0.35) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1)
+```
+
+```{r fig.width=25, fig.height=4}
+ggplot(bgsignals[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))], Blockade], col = 2) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1)
+```
+
+```{r}
+sig0[, .N, A]
+bgsignals[, .N]
+```
+
+```{r eval=FALSE}
+distance_list <- mclapply(sig_file, function(a) {
+  sig0 <- sig0[A == a]
+  B_file <- gsub("\\.[0-9]", "", a)
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+  Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+  if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+    Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+  } else {
+    Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+  }
+  
+  FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+  setkey(FeatureMatrix, ID)
+  FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | grepl("DwellTime", colnames(FeatureMatrix)), with = F], row.names = FeatureMatrix[[1]])
+  euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+  return(euclidean)
+}, mc.cores = length(sig_file))
+saveRDS(distance_list, file = "./analysis/83.Hydrolyzation/02.SignalDistance/FYSL.signal.dist.list.Rds")
+```
+
+```{r fig.width=20, fig.height=4}
+sigs <- KnnSelecting(signals = sig0[A == sig_file[1]], dists = distance_list[[1]], k = 10, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(Sig_FeatureMatrixs, row.names(Sig_FeatureMatrixs) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 100, Keep = 0.9)
+ggplot(sig0[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+```{r}
+gdata::mv("sigs", "sigs1")
+```
+
+
+
+```{r fig.width=20, fig.height=4}
+sigs <- KnnSelecting(signals = sig0[A == sig_file[2]], dists = distance_list[[2]], k = 10, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(Sig_FeatureMatrixs, row.names(Sig_FeatureMatrixs) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 100, Keep = 0.95)
+ggplot(sig0[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+```{r}
+gdata::mv("sigs", "sigs2")
+```
+
+
+```{r fig.width=20, fig.height=4}
+sigs <- KnnSelecting(signals = sig0[A == sig_file[3]], dists = distance_list[[3]], k = 10, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(Sig_FeatureMatrixs, row.names(Sig_FeatureMatrixs) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 100, Keep = 0.95)
+ggplot(sig0[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+```{r}
+gdata::mv("sigs", "sigs3")
+```
+
+
+
+```{r fig.width=20, fig.height=4}
+sigs <- KnnSelecting(signals = sig0[A == sig_file[4]], dists = distance_list[[4]], k = 10, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(Sig_FeatureMatrixs, row.names(Sig_FeatureMatrixs) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 100, Keep = 0.95)
+ggplot(sig0[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+```{r}
+gdata::mv("sigs", "sigs4")
+```
+
+
+
+```{r fig.width=20, fig.height=4}
+sigs <- KnnSelecting(signals = sig0[A == sig_file[5]], dists = distance_list[[5]], k = 10, noise = 0)
+```
+
+```{r}
+subtab <- subset.data.frame(Sig_FeatureMatrixs, row.names(Sig_FeatureMatrixs) %in% sigs)
+res.ds <- stats::dist(subtab)
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+sigs <- RemoveOutlier(tree = res.hc, n = 100, Keep = 0.95)
+ggplot(sig0[ID %in% sigs], aes(x = Blockade, y = DwellTime, colour = ID %in% sigs)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = "#E41A1C") + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(sigs))
+```
+
+```{r}
+gdata::mv("sigs", "sigs5")
+```
+
+
+```{r}
+select_sigs <- c(sigs1, sigs2, sigs3, sigs4, sigs5)
+select_sigs <- sig0[ID %in% c(sigs1, sigs2, sigs3, sigs4, sigs5)]
+```
+
+```{r}
+ggplot(select_sigs, aes(x = Blockade, y = DwellTime, colour = A)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[strsplit("FLSY", "")[[1]]], Blockade]) + 
+  theme_classic() + 
+  theme(legend.position = "none")
+```
+
+```{r eval=FALSE}
+fwrite(select_sigs, file = "./analysis/83.Hydrolyzation/03.SelectedSignals/FYSL.selected.signals.2.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelFLSY/RFmodel.Rds")
+model2 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelACDEFGHIKLMNPQRSTVWY/RFmodel.Rds")
+```
+
+```{r}
+select_sigs[, ID := gsub("FYSL_", "", ID)]
+```
+
+```{r}
+ggplot(select_sigs, aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+```{r}
+meta0 <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/整理数据(20230831).xlsx", sheet = 1))
+colnames(meta0) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "base_line", "note")
+meta1 <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/整理数据(20230831).xlsx", sheet = 7))
+colnames(meta1) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "concentration", "note")
+meta <- unique(rbind(meta0[, 1:4], meta1[, 1:4]))
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/83.Hydrolyzation/01.SelectedL0"))]
+meta <- meta[amino_acid %in% c("FYSL"), ]
+meta[, sig_file := paste0("./analysis/83.Hydrolyzation/03.SelectedSignals/", file_id, ".selected.signals.txt")]
+meta <- meta[file.exists(sig_file)]
+```
+
+```{r}
+FeatureMatrix <- lapply(meta[, unique(file_name)], function(x) {
+  fread(paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", x, ".txt"))
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+```
+
+```{r}
+subtab <- FeatureMatrix[ID %in% select_sigs$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model2, subtab)), 
+                    Prob2 = apply(predict(model2, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model2, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+FYSL_1 <- merge(select_sigs, pred1, by = "ID")
+```
+
+```{r}
+ggplot(FYSL_1, aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point() + 
+  scale_y_log10()
+
+ggplot(FYSL_1, aes(x = Blockade, y = DwellTime, colour = Pred2)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+```{r}
+FYSL_1 <- do.call(rbind, lapply(split(FYSL_1, FYSL_1$Pred1), function(x) data.table(x, D1 = x[, get_density(x = Blockade, y = log10(DwellTime))])))
+```
+
+```{r}
+ggplot(FYSL_1, aes(x = Blockade, y = DwellTime, colour = get_density(x = Blockade, y = log10(DwellTime), n = 1000))) + 
+  geom_point(size = 1) + 
+  scale_colour_gradient(high = "red", low = "grey99") + 
+  scale_y_log10() + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank())
+```
+
+```{r}
+ggplot(FYSL_1[Prob1 > 0.75 & Delta1 > 0.5], aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point(mapping = aes(alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank())
+```
+
+```{r}
+ggplot(FYSL_1[Prob1 > 0.75 & Delta1 > 0.5], aes(x = SignalCurrentPercent, colour = Pred1)) + 
+  geom_line(stat = "density")
+```
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred1 %in% x[, .N, Pred1][N > 3, Pred1]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred1, colour = Pred1), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA, colour = AA), size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + theme(panel.grid = element_blank())
+}
+AADensityPlot1(x = FYSL_1[Prob1 > 0.75 & Delta1 > 0.5], target = c("Leu", "Ser", "Phe", "Tyr"))
+```
+
+```{r fig.width=12, fig.height=4}
+FYSL_1_N <- FYSL_1[Prob1 > 0.75 & Delta1 > 0.5][Prob2 > 0.75 & Delta2 > 0.5, .N, .(Pred1, Pred2)][, .(Pred2, N, P = N / sum(N)), Pred1]
+FYSL_1_N[, Pred1 := as.character(Pred1)]
+FYSL_1_N[, Pred2 := as.character(Pred2)]
+FYSL_1_N[, L := paste0(round(P * 100, 2), " %")]
+# FYSL_1_N[Pred1 != Pred2, L := ""]
+
+ggplot(FYSL_1_N, aes(x = 1, y = P, fill = Pred2)) + 
+  geom_col() + 
+  geom_text_repel(aes(label = L), position = position_stack(vjust = .5), colour = "white", size = 4) + 
+  geom_text_repel(aes(x = 1.7, label = Pred2, colour = Pred2), position = position_stack(vjust = .5), size = 5) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = guide_legend(nrow = 1)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = guide_legend(nrow = 1)) + 
+  coord_polar("y") + 
+  facet_wrap(~ Pred1, nrow = 1) + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(legend.position = "none", 
+        legend.title = element_blank(), 
+        plot.background = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text = element_blank(), 
+        axis.line = element_blank(), 
+        axis.ticks = element_blank())
+```
+
+```{r}
+AADensityPlot2 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred2 %in% x[, .N, Pred2][N > 3, Pred2]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred2, colour = Pred2), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA, colour = AA), size = 5, direction = "y", nudge_y = .1, min.segment.length = unit(100, "cm")) + theme(panel.grid = element_blank())
+}
+AADensityPlot2(x = FYSL_1[Prob1 > 0.75 & Delta1 > 0.5][Prob2 > 0.75 & Delta2 > 0.5, ], target = c("Leu", "Ser", "Phe", "Tyr"))
+```

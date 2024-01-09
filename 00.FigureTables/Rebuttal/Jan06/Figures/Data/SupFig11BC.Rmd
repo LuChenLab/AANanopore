@@ -1,0 +1,171 @@
+---
+title: "Supplementary Figure 11 b"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/Modeling_Data.RData")
+model1 <- readRDS("analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/RF_model.Rds")
+train_res <- data.table(ID = Sigs_Train_Upsample$ID, Obse = Sigs_Train_Upsample$AA, Pred = model1$finalModel$predicted, Prob = apply(model1$finalModel$votes, 1, max))
+train_res[, Obse := factor(Obse, levels = train_res[, levels(Pred)])]
+train_res[, mean(Obse == Pred)]
+
+Sigs_Test_FM <- Sigs_Test_FM[Sigs_Test[, !is.infinite(SignalCurrentWidth)], ]
+Sigs_Test <- Sigs_Test[!is.infinite(SignalCurrentWidth)]
+test_res <- data.table(ID = Sigs_Test$ID, Obse = Sigs_Test$AA, Pred = predict(model1, Sigs_Test_FM), Prob = apply(predict(model1, Sigs_Test_FM, type = "prob"), 1, max))
+test_res[, Obse := factor(Obse, levels = test_res[, levels(Pred)])]
+test_res[, mean(Obse == Pred)]
+model1_res <- rbind(data.table(train_res, Dataset = "Training"), data.table(test_res, Dataset = "Testing"))
+
+cutoffList <- lapply(1:50/50, function(b) {
+  merge(model1_res[, .(Recovery = mean(Prob >= b) * 100), by = Dataset], 
+        model1_res[Prob >= b, .(Accuracy = mean(Obse == Pred) * 100), by = Dataset])
+})
+cutoffList <- data.table(Cutoff = rep(1:50/50, mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+cutoffList[, L := paste0("(", round(Recovery, 1), ", ", round(Accuracy, 1), ")")]
+
+gdata::mv("cutoffList", "cutoffList_L1")
+```
+
+L2
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L2/Modeling_Data.RData")
+model1 <- readRDS("analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L2/RF_model.Rds")
+train_res <- data.table(ID = Sigs_Train_Upsample$ID, Obse = Sigs_Train_Upsample$AA, Pred = model1$finalModel$predicted, Prob = apply(model1$finalModel$votes, 1, max))
+train_res[, Obse := factor(Obse, levels = train_res[, levels(Pred)])]
+train_res[, mean(Obse == Pred)]
+
+Sigs_Test_FM <- Sigs_Test_FM[Sigs_Test[, !is.infinite(SignalCurrentWidth)], ]
+Sigs_Test <- Sigs_Test[!is.infinite(SignalCurrentWidth)]
+test_res <- data.table(ID = Sigs_Test$ID, Obse = Sigs_Test$AA, Pred = predict(model1, Sigs_Test_FM), Prob = apply(predict(model1, Sigs_Test_FM, type = "prob"), 1, max))
+test_res[, Obse := factor(Obse, levels = test_res[, levels(Pred)])]
+test_res[, mean(Obse == Pred)]
+model1_res <- rbind(data.table(train_res, Dataset = "Training"), data.table(test_res, Dataset = "Testing"))
+
+cutoffList <- lapply(1:50/50, function(b) {
+  merge(model1_res[, .(Recovery = mean(Prob >= b) * 100), by = Dataset], 
+        model1_res[Prob >= b, .(Accuracy = mean(Obse == Pred) * 100), by = Dataset])
+})
+cutoffList <- data.table(Cutoff = rep(1:50/50, mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+cutoffList[, L := paste0("(", round(Recovery, 1), ", ", round(Accuracy, 1), ")")]
+
+gdata::mv("cutoffList", "cutoffList_L2")
+```
+
+Ls
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/Ls/Modeling_Data.RData")
+model1 <- readRDS("analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/Ls/RF_model.Rds")
+train_res <- data.table(ID = Sigs_Train_Upsample$ID, Obse = Sigs_Train_Upsample$AA, Pred = model1$finalModel$predicted, Prob = apply(model1$finalModel$votes, 1, max))
+train_res[, Obse := factor(Obse, levels = train_res[, levels(Pred)])]
+train_res[, mean(Obse == Pred)]
+
+Sigs_Test_FM <- Sigs_Test_FM[Sigs_Test[, !is.infinite(SignalCurrentWidth)], ]
+Sigs_Test <- Sigs_Test[!is.infinite(SignalCurrentWidth)]
+test_res <- data.table(ID = Sigs_Test$ID, Obse = Sigs_Test$AA, Pred = predict(model1, Sigs_Test_FM), Prob = apply(predict(model1, Sigs_Test_FM, type = "prob"), 1, max))
+test_res[, Obse := factor(Obse, levels = test_res[, levels(Pred)])]
+test_res[, mean(Obse == Pred)]
+model1_res <- rbind(data.table(train_res, Dataset = "Training"), data.table(test_res, Dataset = "Testing"))
+
+cutoffList <- lapply(1:50/50, function(b) {
+  merge(model1_res[, .(Recovery = mean(Prob >= b) * 100), by = Dataset], 
+        model1_res[Prob >= b, .(Accuracy = mean(Obse == Pred) * 100), by = Dataset])
+})
+cutoffList <- data.table(Cutoff = rep(1:50/50, mapply(nrow, cutoffList)), do.call(rbind, cutoffList))
+cutoffList[, L := paste0("(", round(Recovery, 1), ", ", round(Accuracy, 1), ")")]
+
+gdata::mv("cutoffList", "cutoffList_Ls")
+```
+
+```{r}
+cutoffList <- rbind(data.table(State = "State1", cutoffList_L1), data.table(State = "State2", cutoffList_L2), data.table(State = "State1 + State2", cutoffList_Ls))
+cutoffList[, State := factor(State, levels = c("State1", "State2", "State1 + State2"))]
+```
+
+```{r}
+data <- cutoffList[, .(State, Dataset, Cutoff, Recovery, Accuracy)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig11B.xlsx")
+```
+
+```{r fig.width=7, fig.height=4}
+ggplot(data, aes(x = Recovery, y = Accuracy, colour = State, linetype = Dataset)) + 
+  geom_line() + 
+  scale_x_reverse() + 
+  labs(x = "Recovery (%)", y = "Accuracy (%)", tag = "b") + 
+  scale_color_brewer(palette = "Dark2", guide = guide_legend(reverse = F, ncol = 1)) + 
+  scale_linetype(guide = guide_legend(reverse = T, ncol = 1)) + 
+  theme_bw(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank())
+```
+
+```{r}
+vImp1 <- lapply(c("L1", "L2", "Ls"), function(x) {
+  model1 <- readRDS(paste0("analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/", x, "/RF_model.Rds"))
+  vImp <- varImp(model1, scale = T)
+  vImp <- data.table(Importance = vImp$importance[, 1], Variable = row.names(vImp$importance))
+  vImp1 <- vImp[grepl("^X", Variable)]
+  vImp1[, x := as.numeric(gsub("X", "", Variable))]
+  data.table(State = x, vImp1)
+})
+vImp1 <- do.call(rbind, vImp1)
+vImp1[, State := plyr::mapvalues(State, c("L1", "L2", "Ls"), c("State1", "State2", "State1 + State2"))]
+vImp1[, State := factor(State, levels = c("State1", "State2", "State1 + State2"))]
+```
+
+```{r}
+data <- vImp1[, .(State, Importance, Variable, x)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig11C.xlsx")
+```
+
+```{r}
+ggplot(data[!is.na(x)], aes(x = x, y = Importance, colour = State)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), labels = c("X0001", "X0250", "X0500", "X0750", "X1000"), 
+                     sec.axis = dup_axis(name = "Blockade", breaks = c(0, 250, 500, 750, 1000), labels = c(1, 0.75, 0.5, 0.25, 0))) + 
+  scale_color_brewer(palette = "Dark2", guide = guide_legend(reverse = F, ncol = 1)) + 
+  labs(x = "Predictors", tag = "c") + 
+  theme_bw(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank())
+```
+
+

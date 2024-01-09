@@ -1,0 +1,194 @@
+---
+title: "Figure 5 c"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))[experiment != "EFG Rep1"]
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))[experiment != "EFG Rep1"]
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta0 <- meta[is.na(amino_acid)]
+meta <- meta[!is.na(amino_acid)]
+```
+
+```{r}
+meta <- meta[seq == "LNFAE" & Stage == "Polypeptide + Hydrolase"]
+```
+
+
+```{r}
+meta[, sig_file := paste0("./analysis/81.ABFProcessing/RawSignal/RawSignal_", file_name, ".txt")]
+meta[, file.exists(sig_file)]
+```
+
+# base line distribution
+
+```{r}
+RawSig <- lapply(meta[, sig_file], fread)
+RawSig <- data.table(file_id = rep(meta[, file_name], mapply(nrow, RawSig)), do.call(rbind, RawSig))
+```
+
+```{r fig.width=18, fig.height=8}
+ggplot(RawSig, aes(x = BaseMean)) + 
+  geom_histogram(binwidth = .5) + 
+  facet_wrap(~ file_id, scales = "free", nrow = 2)
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(RawSig, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  geom_vline(xintercept = AABlockade[AA == "Ala", Blockade], col = 2) + 
+  facet_wrap(~ file_id)
+```
+
+```{r}
+meta$file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/91.RealTimeHydrolysis/01.SelectedL0/"))
+select_sigs <- lapply(meta[, paste0("./analysis/91.RealTimeHydrolysis/01.SelectedL0/", file_id, ".MainL0.txt")], fread)
+select_sigs <- do.call(rbind, select_sigs)
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(select_sigs, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  geom_vline(xintercept = AABlockade[AA == "Ala", Blockade], col = 2) + 
+  facet_wrap(~ A)
+```
+
+# Amino acid prediction
+
+
+```{r}
+B_file <- unique(meta[!is.na(amino_acid), file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+B_file <- B_file[file.exists(B_file)]
+Sig_FeatureMatrixs <- do.call(rbind, lapply(B_file, fread))
+```
+
+```{r}
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAEFLN/RFmodel.Rds")
+```
+
+```{r}
+pred1 <- data.table(ID = Sig_FeatureMatrixs$ID, 
+                    Pred1 = as.character(predict(model1, Sig_FeatureMatrixs)), 
+                    Prob1 = apply(predict(model1, Sig_FeatureMatrixs, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, Sig_FeatureMatrixs, type = "prob"), 1, function(x) - diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LNFAE <- merge(RawSig, pred1, by = "ID")
+LNFAE[, AA := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+LNFAE[, AA := factor(AA, levels = c("E", "A", "F", "N", "L"))]
+LNFAE <- LNFAE[ID %in% select_sigs$ID]
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(LNFAE[order(Delta1)], aes(x = Blockade, y = DwellTime * 1000, colour = Delta1 > 0.99)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  geom_vline(xintercept = AABlockade[AA == "Ala", Blockade], col = 2) + 
+  facet_wrap(~ file_id)
+```
+
+```{r fig.width=6, fig.height=4}
+ggplot(LNFAE[Delta1 > 0.95], aes(x = Blockade, y = DwellTime * 1000, colour = Pred1)) + 
+  geom_point(size = .2) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], Blockade], limits = c(0.1, 0.4), 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("LNFAE", ""))], AA])
+```
+
+
+```{r fig.width=8, fig.height=4}
+ggplot(LNFAE, aes(x = BaseMean)) + 
+  geom_histogram(binwidth = .5) + 
+  scale_x_continuous(limits = c(50, 150)) + 
+  facet_wrap( ~ file_id, scales = "free", nrow = 1)
+```
+
+```{r fig.width=8, fig.height=4}
+ggplot(LNFAE[Delta1 > 0.95], aes(x = BaseMean)) + 
+  geom_histogram(binwidth = .5) + 
+  scale_x_continuous(limits = c(50, 150)) + 
+  facet_wrap( ~ file_id, scales = "free", nrow = 1)
+```
+
+
+```{r}
+Pred_N <- LNFAE[Delta1 > 0.95, .N, .(Pred1, file_id)]
+Pred_N[, A := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+Pred_N[, A := factor(A, levels = c("E", "A", "F", "N", "L"))]
+
+ggplot(Pred_N, aes(x = A, y = N)) + 
+  geom_col() + 
+  facet_wrap(~ file_id)
+
+ggplot(Pred_N, aes(x = A, y = N, fill = file_id)) + 
+  geom_col()
+```
+
+```{r}
+ECDFcumsum <- function(mat) {
+  lapply(mat[, unique(file_id)], function(fi) {
+    x <- mat[file_id == fi]
+    t1 <- x[, floor(min(StartTime))]
+    t2 <- x[, ceiling(max(StartTime))]
+    As <- x[, unique(AA)]
+    res <- lapply(As, function(i) {
+      F1 <- x[AA == i, ecdf(StartTime)]
+      data.table(AA = i, Time = seq(t1, t2, 1), ECDF = F1(seq(t1, t2, 1)), cumsum = F1(seq(t1, t2, 1)) * x[AA == i, .N])
+    })
+    data.table(file_id = fi, do.call(rbind, res))
+  }) -> res
+  do.call(rbind, res)
+}
+```
+
+```{r fig.width=16, fig.height=4}
+tab <- ECDFcumsum(LNFAE[Delta1 > 0.95])
+ggplot(tab, aes(x = Time, y = cumsum, colour = AA)) + 
+  geom_line() + 
+  geom_label_repel(data = tab[, .SD[which.max(Time)], .(AA, file_id)], aes(label = AA)) + 
+  facet_wrap(~ file_id, scales = "free") + 
+  scale_y_sqrt()
+```
+
+
+

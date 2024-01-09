@@ -1,0 +1,343 @@
+---
+title: "Figure 4 i"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+
+RemoveOutlier <- function(tree, n = 10, Keep = 0.95) {
+  h <- length(tree$height)
+  g <- cutree(tree, h = tree$height[h])
+  g <- data.table(tip = names(g), cluster = g)
+  
+  while (g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] > Keep) {
+    h <- h - 1
+    g <- cutree(tree, h = tree$height[h])
+    g <- data.table(tip = names(g), cluster = g)
+  }
+  cat(paste0("Keep: ", round(g[, .N, cluster][N >= n, sum(N)/length(tree$labels)] * 100, 2), "%"))
+  g[cluster %in% g[, .N, cluster][N >= n, cluster], tip]
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/WangZichun/20231040CMCC/20231020起实验数据记录.xlsx", sheet = 1))[, 1:7]
+colnames(meta) <- c("file_name", "start_time", "end_time",  "amino_acid", "file_id", "sample", "base_line")
+meta <- meta[grepl("半胱氨酸及其衍生物区分", sample)]
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid = base_line, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/RawSignal/RawSignal_", file_name, ".txt")]
+meta[, file.exists(sg_files)]
+meta <- meta[file.exists(sg_files), ]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+meta[, sig_file := paste0("./analysis/90.UnnaturalPTM/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sig_file), ]
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+```{r}
+CMCC <- data.table(AA = "CMC + C", fread(file.path("./analysis/90.UnnaturalPTM/03.SelectedSignals/CMC_Cys_euclidean_distance_knn_selected.signals.txt")))
+```
+
+```{r}
+sig1 <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/Cys.signal.txt"))
+sig1[, AA := "C"]
+setnames(sig1, "file_id", "A")
+
+sig2 <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/CbC.signal.txt"))
+sig2[, AA := "CMC"]
+setnames(sig2, "file_id", "A")
+```
+
+```{r}
+Sigs <- rbind(CMCC, sig1[State != "Mixtrue"], sig2[State != "Mixtrue"], fill = TRUE)
+```
+
+```{r}
+Sigs <- split(Sigs, Sigs$AA)
+Sigs <- lapply(Sigs, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+Sigs <- do.call(rbind, Sigs)
+Sigs[, AA := factor(AA, levels = c("C", "CMC", "CMC + C"))]
+```
+
+```{r fig.width=4, fig.height=6}
+ggplot(Sigs[Blockade < 0.35 & AA != "CMC + C"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(1, 10, 100, 1000)) + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_stata() + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+p1
+```
+
+```{r fig.width=24, fig.height=6}
+dataset <- do.call(rbind, lapply(meta[amino_acid != "blank", sig_file], fread))
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", unique(meta[amino_acid != "blank", file_name]), ".txt")
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+FeatureMatrix <- FeatureMatrix[ID %in% dataset$ID]
+```
+
+```{r}
+model0 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelACDEFGHIKLMNPQRSTVWY/RFmodel.Rds")
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/Ls/CMC_Cys/RF_model.Rds")
+pred1 <- data.table(ID = FeatureMatrix$ID, 
+                    Pred1 = as.character(predict(model0, FeatureMatrix)), 
+                    Prob1 = apply(predict(model0, FeatureMatrix, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model0, FeatureMatrix, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model1, FeatureMatrix)), 
+                    Prob2 = apply(predict(model1, FeatureMatrix, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model1, FeatureMatrix, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DwellTime", "DeltaMean", "StageSD", "CurrentSD", "SignalCurrentPercent", "SignalCurrentWidth", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+dataset <- merge(dataset, pred1)
+```
+
+```{r}
+Cys_ID <- dataset[Pred2 == "Cys" & Prob2 > 0.95 & Prob1 < 0.5, ID]
+Cys_ID <- setdiff(Cys_ID, CMCC$ID)
+```
+
+```{r}
+ggplot(dataset[ID %in% Cys_ID], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.6)) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("C", ""))], Blockade], col = 2) + 
+  geom_vline(xintercept = c(0.16, 0.24))
+```
+
+```{r}
+Cys_ID <- intersect(Cys_ID, dataset[Blockade > 0.16 & Blockade < 0.24 & DwellTime > 0.3, ID])
+```
+
+```{r}
+ggplot(dataset[ID %in% Cys_ID], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.6)) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("C", ""))], Blockade], col = 2) + 
+  geom_vline(xintercept = c(0.16, 0.24))
+```
+
+```{r}
+subtab <- subset.data.frame(FeatureMatrix, row.names(FeatureMatrix) %in% Cys_ID)
+res.ds <- stats::dist(subtab, method = "euclidean")
+res.hc <- stats::hclust(res.ds, method = "single")
+```
+
+```{r}
+Cys_ID <- RemoveOutlier(tree = res.hc, n = 10, Keep = 0.6)
+ggplot(dataset[ID %in% Cys_ID], aes(x = Blockade, y = DwellTime, colour = ID %in% Cys_ID)) + 
+  geom_point(size = .5) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) +
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("C", ""))], Blockade]) + 
+  scale_colour_manual(values = "#E41A1C") + 
+  theme_classic() + 
+  theme(legend.position = "none") + 
+  labs(title = length(Cys_ID))
+```
+
+
+```{r}
+CMCC2 <- rbind(CMCC, dataset[ID %in% Cys_ID], fill = TRUE)
+CMCC2[, AA := "CMC + C"]
+CMCC2[, Pred1 := NULL]
+CMCC2[, Pred2 := NULL]
+CMCC2[, Delta1 := NULL]
+CMCC2[, Delta2 := NULL]
+CMCC2[, Prob1 := NULL]
+CMCC2[, Prob2 := NULL]
+```
+
+
+```{r}
+Sig_FeatureMatrixs <- mclapply(unique(meta[, file_id]), function(a) {
+  B_file <- gsub("\\.[0-9]", "", a)
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  do.call(rbind, lapply(B_file, fread))
+}, mc.cores = 2)
+Sig_FeatureMatrixs <- do.call(rbind, Sig_FeatureMatrixs)
+setkey(Sig_FeatureMatrixs, ID)
+```
+
+```{r}
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/Ls/CMC_Cys/RF_model.Rds")
+```
+
+```{r}
+stopifnot(mean(CMCC2$ID %in% Sig_FeatureMatrixs$ID) == 1)
+subtab <- Sig_FeatureMatrixs[CMCC2$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+CMCC2 <- merge(CMCC2, pred1, by = "ID")
+```
+
+```{r}
+ggplot(CMCC2[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  # facet_wrap(~ Pred1) + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_stata() + 
+  theme_base() + 
+  theme(plot.background = element_blank())
+```
+
+```{r}
+CMCC2[, D := NULL]
+CMCC2 <- split(CMCC2, CMCC2$A)
+CMCC2 <- lapply(CMCC2, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+CMCC2 <- do.call(rbind, CMCC2)
+CMCC2[, Pred1 := plyr::mapvalues(Pred1, c("Cys", "CbC"), c("C", "CMC"))]
+```
+
+```{r}
+ggplot(CMCC2[Prob1 > 0.7 & Delta1 > 0.5][sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = Pred1)) + 
+  scale_y_log10(breaks = c(1, 10, 100, 1000)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind(guide = guide_legend(reverse = T, nrow = 2)) + 
+  scale_alpha(guide = "none") + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.title = element_blank(), 
+        legend.background = element_blank(), 
+        legend.position = c(0.2, 0.8)) -> p2
+p2
+```
+
+
+```{r}
+openxlsx::write.xlsx(list(Sigs[AA != "CMC + C"], CMCC2[Prob1 > 0.7]), "./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig4I.xlsx")
+```
+
+

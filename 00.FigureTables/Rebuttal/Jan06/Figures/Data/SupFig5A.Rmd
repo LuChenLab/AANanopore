@@ -1,0 +1,72 @@
+---
+title: "Supplementary Figure 5 a"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r echo=FALSE}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+aat <- "His"
+bgsignal <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"))
+bgsignal[, file_id := as.character(file_id)]
+bgsignal[, File := gsub("\\.[0-9]", "", file_id)]
+bgsignal[, ID := paste0("Noise_", ID)]
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+data <- bgsignal[, .(File, ID, StartTime, EndTime, DwellTime, Blockade, Density = D)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig5A.xlsx")
+```
+
+```{r}
+ggplot(data = data[order(Density)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  geom_point(aes(alpha = pmin(Density + .02, 1), colour = File), size = .1) + 
+  scale_y_log10(limits = c(0.12, 1345.23)) + 
+  scale_x_continuous(limits = c(0.03, 1)) + 
+  scale_colour_brewer(palette = "Set2") + 
+  scale_fill_manual(values = c(scales::alpha("grey20", 0:99/99), RColorBrewer::brewer.pal(n = 6, name = "Dark2")), aesthetics = c("fill")) + 
+    labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none")
+```

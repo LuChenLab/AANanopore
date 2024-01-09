@@ -1,0 +1,433 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta <- meta[!is.na(amino_acid)]
+```
+
+```{r}
+EAFNL1 <- fread("./analysis/91.RealTimeHydrolysis/04.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL1[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+EAFNL2 <- fread("./analysis/91.RealTimeHydrolysis/34.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL2[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+
+
+```{r}
+ggplot() + 
+  geom_point(data = EAFNL1[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(a_cols), values = a_cols) + 
+  # scale_x_continuous(limits = c(0.11, 0.23)) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+EAFNL <- rbind(EAFNL1, EAFNL2)
+EAFNL[, A := as.character(A)]
+EAFNL <- merge(meta, EAFNL, by.x = "file_id", by.y = "A")
+```
+
+
+```{r fig.width=8, fig.height=5}
+ggplot(EAFNL[Prob1 > 0.7][sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = Pred1, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3), n.breaks = 3) + 
+  scale_colour_manual(breaks = names(a_cols[unlist(strsplit("EAFNL", ""))]), values = a_cols[unlist(strsplit("EAFNL", ""))], guide = guide_legend(override.aes = list(size = 2))) + 
+  guides(alpha = "none") + 
+  facet_wrap(~ seq) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none",
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred1 %in% x[, .N, Pred1][N > 3, Pred1]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred1, colour = Pred1), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(a_cols), values = a_cols) + 
+    scale_colour_manual(breaks = names(a_cols), values = a_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% a_cols[target]]
+  tab <- merge(tab, data.table(AA = names(a_cols), colour = a_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.5, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 6, direction = "y", nudge_y = 0, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+
+p2 <- AADensityPlot1(x = EAFNL[seq == "EAFNL" & Prob1 > 0.7], target = unlist(strsplit("EAFNL", ""))) + facet_wrap(~"EAFNL")
+p3 <- AADensityPlot1(x = EAFNL[seq == "LNFAE" & Prob1 > 0.7], target = unlist(strsplit("EAFNL", ""))) + facet_wrap(~"LNFAE")
+```
+
+```{r}
+p1 <- p1 + theme(strip.background = element_blank(), strip.text = element_blank(), plot.margin = unit(c(0, 1, 1, 1), "line"))
+p2 <- p2 + scale_x_continuous(limits = c(0.1, 0.3)) + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 0, 0, 0), "line"), plot.tag = element_text(face = "bold")) + labs(tag = "c")
+p3 <- p3 + scale_x_continuous(limits = c(0.1, 0.3)) + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 0, 0, 1), "line"))
+```
+
+```{r}
+design <- "
+  12
+  33
+  33
+"
+p2 + p3 + p1 + 
+  plot_layout(design = design)
+```
+
+```{r fig.height=6, fig.width=9, echo=FALSE}
+design <- "
+  12
+  33
+  33
+"
+p2 + p3 + p1 + 
+  plot_layout(design = design)
+# ggsave("./analysis/91.RealTimeHydrolysis/00.SignalPlot/RealTime_Signal_Plot.pdf", width = 7, height = 4)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig5C.pdf", width = 9, height = 6)
+```
+
+```{r}
+EAFNL[, Pred1 := factor(Pred1, levels = c("E", "A", "F", "N", "L"))]
+```
+
+```{r fig.width=6, fig.height=6}
+ggplot(EAFNL[Prob1 > 0.7, .N, .(seq, Pred1)], aes(x = Pred1, y = N, fill = seq)) + 
+  geom_col(position = position_dodge()) + 
+  geom_text(aes(x = Pred1, y = N * 1.3, label = N), position = position_dodge(width = 0.9), size = 6) + 
+  scale_y_log10() + 
+  scale_fill_wsj() + 
+  facet_wrap(~ seq) + 
+  labs(y = "Number of events", x = "Identified amino acid", tag = "d") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p4
+p4
+ggsave("./analysis/91.RealTimeHydrolysis/00.SignalPlot/RealTime_Signal_Plot_N.pdf", width = 6, height = 6)
+```
+
+
+```{r fig.height=6, fig.width=15, echo=FALSE}
+design <- "
+  1122444
+  3333444
+  3333444
+"
+p2 + p3 + p1 + p4 + 
+  plot_layout(design = design)
+# ggsave("./analysis/91.RealTimeHydrolysis/00.SignalPlot/RealTime_Signal_Plot.pdf", width = 7, height = 4)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig5CD.pdf", width = 15, height = 6)
+```
+
+
+
+
+
+
+
+```{r fig.width=5, fig.height=4}
+ggplot(EAFNL[Prob1 > 0.7, .N, .(seq, Pred1)], aes(x = Pred1, y = N, fill = seq)) + 
+  geom_col(position = position_dodge()) + 
+  geom_text(aes(x = Pred1, y = N * 1.3, label = N), position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_fill_wsj() + 
+  # facet_wrap(~ seq) + 
+  labs(y = "Number of events") + 
+  theme_base(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        legend.position = "top", legend.title = element_blank(), 
+        axis.title.x = element_blank())
+ggsave("./analysis/91.RealTimeHydrolysis/00.SignalPlot/RealTime_Signal_Plot_N_V2.pdf", width = 5, height = 4)
+```
+
+```{r}
+ggplot(EAFNL[Prob1 > 0.7, .N, .(seq, Pred1)][, .(Pred1, N, P = N / sum(N)), seq], 
+       aes(x = Pred1, y = P * 100, fill = seq)) + 
+  geom_col(position = position_dodge()) + 
+  # geom_text(aes(x = Pred1, y = P * 1.3, label = N), position = position_dodge(width = 0.9)) + 
+  # scale_y_log10() +
+  scale_fill_wsj() + 
+  # facet_wrap(~ seq) + 
+  labs(y = "Percentage of events") + 
+  theme_base(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        legend.position = "top", legend.title = element_blank(), 
+        axis.title.x = element_blank())
+
+```
+
+```{r}
+ggplot(EAFNL[Prob1 > 0.7, .N, .(seq, Pred1)][, .(Pred1, N, P = N / sum(N)), seq], 
+       aes(x = Pred1, y = P * 100, colour = seq, fill = seq)) + 
+  geom_col(position = position_dodge()) + 
+  # geom_smooth(aes(x = as.numeric(Pred1)), se = F, span = 3) + 
+  geom_text(aes(x = Pred1, y = P * 100, label = N), position = position_dodge(width = 0.9)) +
+  scale_y_sqrt() +
+  scale_fill_wsj() + 
+  scale_colour_wsj() + 
+  # facet_wrap(~ seq) + 
+  labs(y = "Percentage of events") + 
+  theme_base(base_size = 15) + 
+  theme(plot.background = element_blank(), 
+        legend.position = "top", legend.title = element_blank(), 
+        axis.title.x = element_blank())
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+OrdSig <- EAFNL[Stage == "Polypeptide + Hydrolase"]
+OrdSig <- split(OrdSig, OrdSig$file_id)
+OrdSig <- lapply(OrdSig, function(x) {
+  x$SigTime <- (x$StartTime - min(x$StartTime))/(max(x$StartTime) - min(x$StartTime))
+  x
+})
+OrdSig <- do.call(rbind, OrdSig)
+OrdSig_EAFNL <- OrdSig[seq == "EAFNL"]
+OrdSig_EAFNL[, Pred1 := factor(Pred1, levels = unlist(strsplit("EAFNL", "")))]
+
+OrdSig_LNFAE <- OrdSig[seq == "LNFAE"]
+OrdSig_LNFAE[, Pred1 := factor(Pred1, levels = unlist(strsplit("LNFAE", "")))]
+```
+
+```{r}
+ggplot(OrdSig_EAFNL[file_id == "21822008.1" & Pred1 %in% c("F", "N", "L")][, .SD[sample(.N, 100)], Pred1], 
+       aes(x = SigTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "EAFNL", x = "Standardized recording time", y = "Cumulative distribution of signals") + 
+  # scale_colour_manual(breaks = names(a_cols[unlist(strsplit("EAFNL", ""))]), values = a_cols[unlist(strsplit("EAFNL", ""))], guide = guide_legend(override.aes = list(size = 2))) + 
+  # scale_colour_brewer(palette = "Dark2", guide = guide_legend(override.aes = list(size = 2))) + 
+  scale_y_log10() +
+  scale_x_log10() +
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank())
+```
+
+```{r}
+ggplot(OrdSig_LNFAE, aes(x = SigTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "LNFAE", x = "Standardized recording time", y = "Cumulative distribution of signals") + 
+  scale_colour_manual(breaks = names(a_cols[unlist(strsplit("LNFAE", ""))]), values = a_cols[unlist(strsplit("LNFAE", ""))], guide = guide_legend(override.aes = list(size = 2))) +
+  # scale_colour_brewer(palette = "Dark2", guide = guide_legend(override.aes = list(size = 2))) + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank())
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+ggplot(OrdSig_LNFAE[Pred1 %in% c("N", "F", "L")], aes(x = SigTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "LNFAE")
+```
+
+```{r fig.width=20, fig.height=5}
+ggplot(OrdSig_EAFNL, aes(x = SigTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "EAFNL") + 
+  facet_wrap(~ file_id, nrow = 1)
+
+ggplot(OrdSig_EAFNL, aes(x = StartTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "EAFNL") + 
+  facet_wrap(~ file_id, nrow = 1)
+```
+
+
+```{r fig.width=20, fig.height=5}
+ggplot(OrdSig_EAFNL[Pred1 != "A"], aes(x = StartTime, colour = Pred1)) + 
+  geom_density(adjust = 3) + 
+  facet_wrap(~ file_id, nrow = 1, scales = "free")
+```
+
+```{r}
+ggplot(OrdSig_LNFAE, aes(x = SigTime, colour = Pred1)) + 
+  stat_ecdf() + 
+  labs(title = "LNFAE") + 
+  facet_wrap(~ file_id)
+```
+
+```{r fig.width=12, fig.height=4}
+Bin_N <- OrdSig_EAFNL[Prob1 > 0, .N, .(SigTime = round(SigTime * 20), Pred1, file_id)][order(SigTime)]
+Bin_N <- Bin_N[, .(Pred1, N, P = N/sum(N)), .(SigTime, file_id)]
+
+ggplot(Bin_N, aes(x = SigTime, y = P, colour = Pred1)) + 
+  geom_line() +
+  facet_wrap(~file_id, nrow = 1)
+```
+
+

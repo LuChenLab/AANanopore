@@ -1,0 +1,378 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/neoantigen水解20220314.xlsx", sheet = 1, cols = 1:7))
+colnames(meta) <- c("file_name", "date", "amino_acid", "concentration", "start_time", "end_time", "base_line")
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/89.Neoantigen/01.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/89.Neoantigen/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta$amino_acid <- mapply(function(x) strsplit(x, ",")[[1]][2], meta$amino_acid)
+meta[, file.exists(sig_file)]
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+SigSumm <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+LFGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LFGV_prediction.txt", sep = "\t")
+```
+
+```{r}
+ggplot(data = LFGV[Prob2 > 0.7][sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = Pred2, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.11, 0.23)) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred2 %in% x[, .N, Pred2][N > 3, Pred2]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred2, colour = Pred2), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+AADensityPlot1(x = LFGV[Prob2 > 0.7], target = c("Gly", "Leu", "Ser", "Val", "Phe")) -> p2
+p2 <- p2 + scale_x_continuous(limits = c(0.11, 0.23))
+p2
+```
+
+
+```{r}
+LSGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LSGV_prediction.txt", sep = "\t")
+```
+
+```{r}
+ggplot(data = LSGV[Prob2 > 0.7][sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = Pred2, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.11, 0.23)) + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p3
+p3
+```
+
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred2 %in% x[, .N, Pred2][N > 3, Pred2]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred2, colour = Pred2), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 5, direction = "y", nudge_y = -.05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+AADensityPlot1(x = LSGV[Prob2 > 0.7], target = c("Gly", "Leu", "Ser", "Val", "Phe")) -> p4
+p4 <- p4 + scale_x_continuous(limits = c(0.11, 0.23))
+p4 <- p4 + scale_y_reverse()
+p4
+```
+
+
+```{r}
+p2 <- p2 + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(1, 1, 0, 1), "line"), plot.tag = element_text(face = "bold"))
+p4 <- p4 + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 1, 1, 1), "line"))
+p3 <- p3 + theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r fig.width=5, fig.height=6}
+p2 + p1 + p3 + p4 + plot_layout(ncol = 1)
+```
+
+
+```{r}
+abf_S <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_Username_2022-03-11_003.Rds")
+```
+
+```{r}
+View(LSGV[, .N, .(round(StartTime), Pred2)][order(N, decreasing = T)])
+```
+
+```{r fig.width=18, fig.height=3}
+# abf_i <- abf_S[Time > 418 - .25 & Time < 418 + 0.25]
+abf_i <- abf_S[Time > 248 - 0.52 & Time < 248 + 0]
+L0 <- MainRidge(x = abf_i[, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+aasumm1 <- SigSumm[A %in% AMINO_ACID_CODE[unlist(strsplit("S", ""))]]
+aasumm1[, y := L0 * (1 - BlockadeMean)]
+aasumm1[, ymin := L0 * (1 - BlockadeMean - BlockadeSD)]
+aasumm1[, ymax := L0 * (1 - BlockadeMean + BlockadeSD)]
+```
+
+```{r}
+PreSig <- LSGV[StartTime > 248 - 0.52 & EndTime < 248]
+PreSig[, Pred2 := plyr::mapvalues(Pred2, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r fig.width=7, fig.height=3}
+ggplot() + 
+  geom_rect(data = aasumm1, aes(xmin = abf_i[, min(Time)], xmax = abf_i[, max(Time)], ymin = ymin / L0, ymax = ymax / L0, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_i, mapping = aes(x = Time, y = pA / L0), size = 0.1) + 
+  geom_text(data = PreSig, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0 - 0.2, label = Pred2), direction = "y", size = 6) + 
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm1[, y / L0], labels = aasumm1[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(248 - 0.52, 248 - 0.52 + 0.1), labels = c(0, 0.1)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Standardized current") + 
+  theme_light(base_size = 22) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p5
+p5
+```
+
+
+
+
+
+
+
+```{r}
+abf_F <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_Username_2022-03-14_005.Rds")
+```
+
+```{r}
+LFGV[, .N, .(round(StartTime), Pred2)][order(N, decreasing = T)]
+LFGV[A == "Username_2022-03-14_005.1", .(Phe = sum(Pred2 == "Phe"), Type = length(unique(Pred2))), .(round(StartTime))][Type == 4]
+```
+
+```{r fig.width=18, fig.height=7}
+abf_j <- abf_F[Time > 1282.65 & Time < 1283.125]
+L0_2 <- MainRidge(x = abf_j[, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+aasumm2 <- SigSumm[A %in% AMINO_ACID_CODE[unlist(strsplit("F", ""))]]
+aasumm2[, y := L0_2 * (1 - BlockadeMean)]
+aasumm2[, ymin := L0_2 * (1 - BlockadeMean - BlockadeSD)]
+aasumm2[, ymax := L0_2 * (1 - BlockadeMean + BlockadeSD)]
+```
+
+```{r}
+si <- as.data.table(IRanges(abf_j[, pA / L0_2 < 0.9]))
+si <- si[order(width, decreasing = T)][1:6]
+si <- data.table(StartTime = abf_j[si$start, Time], EndTime = abf_j[si$end, Time])
+si$SignalCurrent <- mapply(seq_len(nrow(si)), FUN = function(x) {
+  abf_j[between(Time, si[x, StartTime], si[x, EndTime]), median(pA)]
+})
+si <- si[order(StartTime)]
+si$Pred2 <- c("F", "V", "", "F", "V", "L")
+```
+
+```{r fig.width=14, fig.height=5}
+ggplot() + 
+  geom_rect(data = aasumm2, aes(xmin = abf_j[, min(Time)], xmax = abf_j[, max(Time)], ymin = ymin / L0_2, ymax = ymax / L0_2, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_j, mapping = aes(x = Time, y = pA / L0_2), size = 0.1) + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0_2 - 0.1, label = Pred2), direction = "y", size = 6) +
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm2[, y / L0_2], labels = aasumm2[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(1282.65, 1282.65 + 0.1), labels = c(0, 0.1)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Standardized current") + 
+  theme_light(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p6
+p6
+```
+
+
+
+
+```{r fig.width=5, fig.height=6}
+p2 + p1 + p3 + p4 + plot_layout(ncol = 1)
+```
+
+```{r fig.width=12, fig.height=8}
+design <- "
+  111115555555
+  222225555555
+  222225555555
+  333336666666
+  333336666666
+  444446666666
+"
+p2 + p1 + p3 + p4 + p5 + p6 + 
+  plot_layout(design = design)
+ggsave("./analysis/89.Neoantigen/04.SignalsPrediction/Neoantigen.pdf", width = 12, height = 6)
+```
+
+
+```{r fig.width=12, fig.height=8}
+design <- "
+  111115555555
+  222225555555
+  222225555555
+  333336666666
+  333336666666
+  444446666666
+"
+p2 + p1 + p3 + p4 + p5 + p6 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig6BC.pdf", width = 12, height = 8)
+```
+
+
+
+```{r}
+p6 <- p6 + theme(axis.title = element_blank()) + labs(tag = "f")
+p5 <- p5 + theme(axis.title.y = element_text(hjust = -.2))
+p1 <- p1 + theme(axis.title.y = element_blank())
+p3 <- p3 + theme(axis.title.y = element_text(hjust = -.8))
+```
+
+```{r fig.width=9, fig.height=12}
+p2 + p1 + p3 + p4 + p6 + p5 + 
+  plot_layout(ncol = 1)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig6EF.pdf", width = 9, height = 12)
+```
+

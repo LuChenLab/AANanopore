@@ -1,0 +1,262 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+SigSumm <- sig0[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), .(AA, A)]
+SigSumm[, A := gsub("CbC", "CMC", A)]
+SigSumm[, AA := gsub("CbC", "CMC", AA)]
+SigSumm[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+SigSumm <- SigSumm[A != "CMC"]
+```
+
+```{r}
+sig1 <- fread("./analysis/86.TemperatureExperiment/03.GroupedSignals/GroupedSignals.txt")
+sig1[, file_id := as.character(file_id)]
+sig1[, file_name := as.character(file_name)]
+sig1[, Temperature := factor(temperature)]
+sig1 <- sig1[sample(.N, .N)]
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = sig1, aes(x = Blockade, y = DwellTime, colour = Temperature), alpha = 0.5) + 
+  # geom_rect(data = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")]], aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = 100)) + 
+  # geom_vline(xintercept = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean]) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  scale_y_log10() + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.position = "none", 
+        legend.title = element_blank()) -> p1
+
+ggplot(data = sig1, aes(x = Blockade, colour = Temperature)) + 
+  geom_line(stat = "density", adjust = 0.2) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  guides(colour = guide_legend(title = "Temperature")) + 
+  theme_void() + 
+  theme(legend.position = "top") -> p2
+
+p2 / p1 + plot_layout(ncol = 1, heights = c(1, 3))
+```
+
+
+```{r}
+State_N <- sig1[, .N, .(pred, Temperature, State)][, .(Temperature, State, N, P = N / sum(N) * 100), pred]
+```
+
+```{r fig.width=4, fig.height=4}
+ggplot(State_N[State == "Sington"], aes(x = pred, y = P, fill = Temperature)) + 
+  geom_col(position = position_dodge()) + 
+  labs(y = "Percentage of sington signal (%)") + 
+  ggthemes::theme_few(base_size = 15) + 
+  theme(axis.title.x = element_blank(), legend.position = "top")
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = sig1[State == "Sington"], aes(x = Blockade, y = DwellTime, colour = Temperature), alpha = 0.5) + 
+  # geom_rect(data = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")]], aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = 100)) + 
+  # geom_vline(xintercept = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean]) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  scale_y_log10() + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.position = "none", 
+        legend.title = element_blank()) -> p1
+
+ggplot(data = sig1[State == "Sington"], aes(x = Blockade, colour = Temperature)) + 
+  geom_line(stat = "density", adjust = 0.4) + 
+  scale_x_continuous(breaks = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], BlockadeMean], labels = SigSumm[AA %in% AMINO_ACID_CODE[c("E", "K", "F", "S")], AA]) + 
+  guides(colour = guide_legend(title = "Temperature")) + 
+  theme_void() + 
+  theme(legend.position = "top") -> p2
+
+p2 / p1 + plot_layout(ncol = 1, heights = c(1, 3))
+```
+
+
+```{r fig.width=10, fig.height=3.5}
+ggplot(sig1[State == "Sington"], aes(x = Temperature, y = Blockade, colour = Temperature)) + 
+  geom_jitter(height = 0, alpha = 0.4) + 
+  geom_boxplot(alpha = 0.6) + 
+  facet_wrap(~ pred, scales = "free", nrow = 1) + 
+  stat_compare_means() + 
+  labs(x = "Temperature") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none")
+
+ggplot(sig1[State == "Sington"], aes(x = Temperature, y = DwellTime, colour = Temperature)) + 
+  geom_jitter(height = 0, alpha = 0.4) + 
+  geom_boxplot(alpha = 0.6) + 
+  scale_y_sqrt() + 
+  facet_wrap(~ pred, scales = "free", nrow = 1) + 
+  stat_compare_means() + 
+  labs(x = "Temperature", y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none")
+```
+
+
+```{r fig.width=4, fig.height=4}
+sig_lab <- sig1[State == "Sington", mean_sd(Blockade), .(pred, Temperature)][, .(y = max(ymax)), pred]
+sig_lab[, symbols := ifelse(pred == "Lys", "ns", "****")]
+ggplot(sig1[State == "Sington", mean_sd(Blockade), .(pred, Temperature)], aes(x = pred, y = y)) + 
+  geom_col(aes(fill = Temperature), position = position_dodge()) + 
+  geom_errorbar(aes(ymin = ymin, ymax = ymax, fill = Temperature), width = 0.2, position = position_dodge(width = 0.9)) + 
+  geom_text(data = sig_lab, aes(x = pred, y + 0.01, label = symbols)) + 
+  labs(y = "Blockade") + 
+  ggthemes::theme_few(base_size = 15) + 
+  theme(axis.title.x = element_blank(), legend.position = "top")
+```
+
+
+```{r}
+Sigs1 <- sig1[State == "Sington"]
+DwellTime1 <- Sigs1[, .N, .(pred, Temperature)]
+DwellTime <- lapply(seq_len(nrow(DwellTime1)), function(i) {
+  ls <- levels(cut_interval(Sigs1[pred == DwellTime1[i, pred] & Temperature == DwellTime1[i, Temperature], DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[pred == DwellTime1[i, pred] & Temperature == DwellTime1[i, Temperature], DwellTime], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = DwellTime1[i, 1:2], A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+DwellTime1 <- do.call(rbind, DwellTime)
+colnames(DwellTime1)[1:2] <- c("pred", "Temperature")
+```
+
+
+```{r}
+Sigs1 <- sig1[State == "Sington"]
+DwellTime2 <- Sigs1[, .N, .(pred)]
+DwellTime <- lapply(seq_len(nrow(DwellTime2)), function(i) {
+  ls <- levels(cut_interval(Sigs1[pred == DwellTime2[i, pred], DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[pred == DwellTime2[i, pred], DwellTime], 10))]
+  mydata <- data.table(x = bin_N, Temperature = Sigs1[pred == DwellTime2[i, pred], Temperature])[, .(y = .N), .(Temperature, x)][order(x)]
+  model3 <- lm(log(y + 1) ~ x + Temperature, data = mydata)
+  data.table(pred = DwellTime2[i, pred], Pvalue = coefficients(summary(model3))[3, 4])
+})
+DwellTime2 <- do.call(rbind, DwellTime)
+```
+
+```{r}
+DwellTime2$symbol <- symnum(DwellTime2[, Pvalue], cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", "ns"))
+DwellTime2 <- merge(DwellTime2, DwellTime1[, .(half.life = max(half.life + half.life_Std.Error)), .(pred)], by = "pred")
+```
+
+```{r fig.width=4, fig.height=4}
+ggplot(data = DwellTime1, mapping = aes(x = pred, y = half.life)) + 
+  geom_col(aes(fill = Temperature), position = position_dodge()) +
+  geom_errorbar(aes(fill = Temperature, ymin = half.life - half.life_Std.Error, ymax = half.life + half.life_Std.Error), width = 0.2, position = position_dodge(width = 1)) +
+  geom_text(data = DwellTime2, aes(label = symbol), size = 5) + 
+  labs(y = "Half life of dwell time (ms)") + 
+  ggthemes::theme_few(base_size = 15) + 
+  theme(axis.title.x = element_blank(), legend.position = "top")
+```
+
+```{r}
+files <- list.files("./analysis/86.TemperatureExperiment/02.SignalsDistance", "select_sigs.txt", recursive = T, full.names = T)
+sig0 <- do.call(rbind, lapply(files, fread))
+sig0[, temperature := factor(temperature)]
+
+files <- list.files("./analysis/86.TemperatureExperiment/02.SignalsDistance", "IntervalTime.txt", recursive = T, full.names = T)
+time0 <- do.call(rbind, lapply(files, fread))
+time0 <- merge(merge(time0, sig0[, .(ID, temperature)], by.x = "SigAfter", by.y = "ID"), sig0[, .(ID, temperature)], by.x = "SigBefore", by.y = "ID")
+time0 <- time0[temperature.x == temperature.y]
+time0[, temperature.y := NULL]
+setnames(time0, "temperature.x", "temperature")
+time0[, temperature := factor(temperature, levels = c(21, 25))]
+```
+
+```{r fig.width=3, fig.height=3}
+ggplot(time0, aes(x = temperature, y = Time2 * 1000, colour = temperature)) + 
+  geom_violin() + 
+  geom_boxplot(position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)", x = "Temperature") + 
+  # scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        legend.title = element_blank())
+```

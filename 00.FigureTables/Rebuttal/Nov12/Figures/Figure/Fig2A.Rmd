@@ -1,0 +1,117 @@
+---
+title: "Figure 2 A"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+SigSumm <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig2A.xlsx"))
+setnames(SigSumm, "AminoAcid", "A")
+```
+
+```{r}
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][1], sd = SigSumm[Class == "Charged", BlockadeSD][1]), colour = aa_cols[SigSumm[Class == "Charged", A][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][2], sd = SigSumm[Class == "Charged", BlockadeSD][2]), colour = aa_cols[SigSumm[Class == "Charged", A][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][3], sd = SigSumm[Class == "Charged", BlockadeSD][3]), colour = aa_cols[SigSumm[Class == "Charged", A][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][4], sd = SigSumm[Class == "Charged", BlockadeSD][4]), colour = aa_cols[SigSumm[Class == "Charged", A][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][5], sd = SigSumm[Class == "Charged", BlockadeSD][5]), colour = aa_cols[SigSumm[Class == "Charged", A][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Charged", BlockadeMean][6], sd = SigSumm[Class == "Charged", BlockadeSD][6]), colour = aa_cols[SigSumm[Class == "Charged", A][6]]) + 
+  scale_x_continuous(limits = c(0.11, 0.26)) + 
+  geom_text_repel(data = SigSumm[Class == "Charged"][, .(A = A, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A), size = 5) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[Class == "Charged", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[Class == "Charged", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "Charged", strip.position = "right") + 
+  theme_light(base_size = 22) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Dark2")[1])) -> p1
+
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][1], sd = SigSumm[Class == "Nonpolar", BlockadeSD][1]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][2], sd = SigSumm[Class == "Nonpolar", BlockadeSD][2]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][3], sd = SigSumm[Class == "Nonpolar", BlockadeSD][3]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][4], sd = SigSumm[Class == "Nonpolar", BlockadeSD][4]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][5], sd = SigSumm[Class == "Nonpolar", BlockadeSD][5]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][6], sd = SigSumm[Class == "Nonpolar", BlockadeSD][6]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][6]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][7], sd = SigSumm[Class == "Nonpolar", BlockadeSD][7]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][7]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][8], sd = SigSumm[Class == "Nonpolar", BlockadeSD][8]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][8]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Nonpolar", BlockadeMean][9], sd = SigSumm[Class == "Nonpolar", BlockadeSD][9]), colour = aa_cols[SigSumm[Class == "Nonpolar", A][9]]) + 
+  scale_x_continuous(limits = c(0.11, 0.26)) + 
+  geom_text_repel(data = SigSumm[Class == "Nonpolar"][, .(A = A, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A), size = 5) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[Class == "Nonpolar", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[Class == "Nonpolar", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "Nonpolar", strip.position = "right") + 
+  theme_light(base_size = 22) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Dark2")[3])) -> p2
+
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][1], sd = SigSumm[Class == "Polar", BlockadeSD][1]), colour = aa_cols[SigSumm[Class == "Polar", A][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][2], sd = SigSumm[Class == "Polar", BlockadeSD][2]), colour = aa_cols[SigSumm[Class == "Polar", A][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][3], sd = SigSumm[Class == "Polar", BlockadeSD][3]), colour = aa_cols[SigSumm[Class == "Polar", A][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][4], sd = SigSumm[Class == "Polar", BlockadeSD][4]), colour = aa_cols[SigSumm[Class == "Polar", A][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][5], sd = SigSumm[Class == "Polar", BlockadeSD][5]), colour = aa_cols[SigSumm[Class == "Polar", A][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[Class == "Polar", BlockadeMean][6], sd = SigSumm[Class == "Polar", BlockadeSD][6]), colour = aa_cols[SigSumm[Class == "Polar", A][6]]) + 
+  scale_x_continuous(limits = c(0.11, 0.26)) + 
+  geom_text_repel(data = SigSumm[Class == "Polar"][, .(A = A, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A), size = 5) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[Class == "Polar", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[Class == "Polar", .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "Polar", strip.position = "right") + 
+  theme_light(base_size = 22) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Dark2")[2])) -> p3
+```
+
+```{r fig.width=5.8, fig.height=10}
+p1 <- p1 + theme(axis.title = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.tag = element_text(face = "bold", size = 30)) + labs(tag = "a")
+p2 <- p2 + theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+p3 <- p3 + theme(axis.title.y = element_blank())
+```
+
+
+```{r fig.height=10, fig.width=6.5, echo=FALSE}
+p1 + p2 + p3 + plot_layout(ncol = 1)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig2A.pdf")
+```
+

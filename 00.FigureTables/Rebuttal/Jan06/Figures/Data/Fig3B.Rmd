@@ -1,0 +1,114 @@
+---
+title: "Figure 3 b"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+load("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version3/L1/Modeling_Data.RData")
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version3/L1/RF_model.Rds")
+Sigs_Train_Upsample <- Sigs_Train_Upsample[AA %in% model1$levels]
+train_res <- data.table(ID = Sigs_Train_Upsample$ID, Obse = Sigs_Train_Upsample$AA, Pred = model1$finalModel$predicted, Prob = apply(model1$finalModel$votes, 1, max))
+train_res[, Obse := factor(Obse, levels = train_res[, levels(Pred)])]
+train_res[, mean(Obse == Pred)]
+
+test_res <- data.table(ID = Sigs_Test$ID, Obse = Sigs_Test$AA, Pred = predict(model1, Sigs_Test_FM), Prob = apply(predict(model1, Sigs_Test_FM, type = "prob"), 1, max))
+test_res <- test_res[Obse != "CMC"]
+test_res[, Obse := factor(Obse, levels = test_res[, levels(Pred)])]
+test_res[, mean(Obse == Pred)]
+
+valid_res <- data.table(ID = Sigs_Valid$ID, Obse = Sigs_Valid$AA, Pred = predict(model1, Sigs_Valid_FM), Prob = apply(predict(model1, Sigs_Valid_FM, type = "prob"), 1, max))
+valid_res <- valid_res[Obse != "CMC"]
+valid_res[, Obse := factor(Obse, levels = valid_res[, levels(Pred)])]
+valid_res[, mean(Obse == Pred)]
+
+model1_res <- rbind(data.table(train_res, Dataset = "Training"), data.table(test_res, Dataset = "Testing"), data.table(valid_res, Dataset = "Validation"))
+model1_res[, Dataset := factor(Dataset, levels = c("Training", "Testing", "Validation"))]
+```
+
+```{r}
+true_label1 <- dummies::dummy(Sigs_Train_Upsample$AA, sep = " ")
+true_label1 <- data.frame(true_label1)
+colnames(true_label1) <- gsub("AA.", "", colnames(true_label1))
+colnames(true_label1) <- paste0(colnames(true_label1), "_true")
+predi <- model1$finalModel$votes
+colnames(predi) <- paste0(colnames(predi), paste0("_pred_", "Training"))
+pred_Training <- cbind(true_label1, predi)
+
+
+true_label1 <- dummies::dummy(Sigs_Test$AA, sep = " ")
+true_label1 <- data.frame(true_label1)
+colnames(true_label1) <- gsub("AA.", "", colnames(true_label1))
+colnames(true_label1) <- paste0(colnames(true_label1), "_true")
+predi <- predict(model1, Sigs_Test_FM, type = "prob")
+colnames(predi) <- paste0(colnames(predi), paste0("_pred_", "Testing"))
+pred_Testing <- cbind(true_label1, predi)
+
+
+true_label1 <- dummies::dummy(Sigs_Valid$AA, sep = " ")
+true_label1 <- data.frame(true_label1)
+colnames(true_label1) <- gsub("AA.", "", colnames(true_label1))
+colnames(true_label1) <- paste0(colnames(true_label1), "_true")
+predi <- predict(model1, Sigs_Valid_FM, type = "prob")
+colnames(predi) <- paste0(colnames(predi), paste0("_pred_", "Validation"))
+pred_Validation <- cbind(true_label1, predi)
+
+predicts1 <- list(pred_Training, pred_Testing, pred_Validation)
+```
+
+```{r}
+roc_RF1 <- lapply(predicts1, function(x) multiROC::multi_roc(x))
+
+plot_roc <- lapply(roc_RF1, function(x) {
+  as.data.table(multiROC::plot_roc_data(x))
+})
+```
+
+```{r}
+roc_mat <- lapply(plot_roc, function(x) {
+  set.seed(123)
+  x[Group == "Macro"][sort(sample(.N, 1000))]
+})
+roc_mat <- do.call(rbind, roc_mat)
+setnames(roc_mat, "Method", "Dataset")
+roc_mat[, Dataset := factor(Dataset, levels = c("Training", "Testing", "Validation"))]
+```
+
+```{r}
+AUCs <- data.table(Dataset = c("Training", "Testing", "Validation"), AUC = mapply(function(x) x$AUC[[1]]$macro, roc_RF1))
+AUCs[, Dataset := factor(Dataset, levels = c("Training", "Testing", "Validation"))]
+```
+
+```{r}
+openxlsx::write.xlsx(list(roc_mat[, .(Dataset, Specificity, Sensitivity)], AUCs), file = "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig3B.xlsx")
+```

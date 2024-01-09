@@ -1,0 +1,156 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(ggthemes)
+library(IRanges)
+library(caret)
+library(shiny)
+library(plotly)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)])
+
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC")
+```
+
+# Select main base line
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("./data/ChenShanchuan/20240106/20240106 整理数据(20230831)-1.xlsx", sheet = 1))
+colnames(meta) <- c("file_name", "start_time", "end_time", "product", "experiment", "sample", "baseline", "note", "X")
+setkey(meta, file_name, start_time)
+all(gsub(".abf", "", list.files("./data/ChenShanchuan/20240106", "abf")) %in% meta$file_name)
+
+meta <- meta[file_name %in% gsub(".abf", "", list.files("./data/ChenShanchuan/20240106", "abf"))]
+meta <- meta[file_name %in% c("2024_01_06_0005", "2024_01_06_0006", "2024_01_06_0007")]
+meta <- meta[, .SD[, .(amino_acid = product, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], .(experiment, file_name)]
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/RawSignal/RawSignal_", file_name, ".txt")]
+meta[, file.exists(sg_files)]
+meta <- meta[file.exists(sg_files), ]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+meta[, sig_file := paste0("./analysis/90.UnnaturalPTM/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta <- meta[file.exists(sig_file)]
+```
+
+# Remain sigle main peak signals
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+```
+
+```{r}
+sig0 <- lapply(meta[amino_acid != "blank", sig_file], fread)
+sig0 <- do.call(rbind, sig0)
+```
+
+```{r fig.width=16, fig.height=4}
+ggplot(sig0[Blockade < 0.3], aes(x = Blockade, y = DwellTime)) + 
+  geom_point(size = 0.4) + 
+  geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("K", ""))], Blockade], col = 2) + 
+  geom_hline(yintercept = 0.35) + 
+  scale_y_log10() + 
+  facet_wrap(~ A, nrow = 1) + 
+  theme_base()
+```
+
+
+## Background
+
+```{r}
+Big_FeatureMatrix <- data.table()
+```
+
+```{r}
+bgsignals0 <- do.call(rbind, lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals", "_background.txt", full.names = TRUE), fread))
+bgsignals0[, ID := paste0("Noise_", ID)]
+Big_FeatureMatrixs <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/01.SignalDistance/StandardAA_Big_FeatureMatrixs.Rds")
+Big_FeatureMatrixs <- Big_FeatureMatrixs[ID %in% bgsignals0$ID]
+Big_FeatureMatrixs[, AA := NULL]
+```
+
+```{r}
+mclapply(meta[amino_acid != "blank", sig_file], function(a) {
+  print(a)
+  outfile <- file.path("./analysis/90.UnnaturalPTM/02.SignalsDistance", gsub(".MainL0.txt", ".signal.dist.Rds", basename(a)))
+  if(file.exists(outfile)) return(NULL)
+  sig0 <- fread(a)
+  B_file <- unique(meta[sig_file == a, file_name])
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+  Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+  if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+    Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+  } else {
+    Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+  }
+  
+  FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+  setkey(FeatureMatrix, ID)
+  FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DwellTime", "DeltaMean", "StageSD", "CurrentSD", "SignalCurrentPercent", "SignalCurrentWidth", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+  euclidean = stats::dist(FeatureMatrix, method = "euclidean")
+  saveRDS(euclidean, file = outfile)
+}, mc.cores = 3)
+```
+
+```{r}
+sig0 <- lapply(meta[amino_acid != "blank", sig_file], fread)
+sig0 <- do.call(rbind, sig0)
+B_file <- unique(meta[amino_acid != "blank", file_name])
+B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+Sig_FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+Sig_FeatureMatrix <- Sig_FeatureMatrix[ID %in% sig0$ID]
+
+if(nrow(Sig_FeatureMatrix) > nrow(Big_FeatureMatrix)) {
+  Big_FeatureMatrix_tu <- rbind(Big_FeatureMatrix, Big_FeatureMatrixs[sample(.N, nrow(Sig_FeatureMatrix) - nrow(Big_FeatureMatrix))])
+} else {
+  Big_FeatureMatrix_tu <- Big_FeatureMatrix[sample(.N, nrow(Sig_FeatureMatrix))]
+}
+
+FeatureMatrix <- rbind(Big_FeatureMatrix_tu, Sig_FeatureMatrix)
+setkey(FeatureMatrix, ID)
+dim(FeatureMatrix)
+
+
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DwellTime", "DeltaMean", "StageSD", "CurrentSD", "SignalCurrentPercent", "SignalCurrentWidth", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+stopifnot(mean(grepl("^Noise", row.names(FeatureMatrix))) == 0.5)
+
+dist <- as.dist(1 - cor(t(FeatureMatrix), method = "spearman"))
+dist <- dbscan::kNN(dist, k = 20)
+saveRDS(dist, file = "./analysis/90.UnnaturalPTM/02.SignalsDistance/AcK_spearman_distance_knn.Rds")
+
+dist = stats::dist(FeatureMatrix, method = "euclidean")
+dist <- dbscan::kNN(dist, k = 20)
+saveRDS(dist, file = "./analysis/90.UnnaturalPTM/02.SignalsDistance/AcK_euclidean_distance_knn.Rds")
+```
+
+

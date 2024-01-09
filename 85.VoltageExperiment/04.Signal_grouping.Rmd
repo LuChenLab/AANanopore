@@ -1,0 +1,1806 @@
+---
+title: "Figure 2"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/85.VoltageExperiment/02.SignalsDistance", "select_sigs.txt", recursive = T, full.names = T)
+sig0 <- do.call(rbind, lapply(files, fread))
+sig0[, voltage := factor(voltage, levels = c(50, 75, 100))]
+sig0[, amino_acid := factor(amino_acid, levels = c("Arg", "Lys", "Asp", "Glu", "Leu", "Thr", "Trp"))]
+sig0[, file_id := as.character(file_id)]
+sig0[, file_name := as.character(file_name)]
+```
+
+```{r fig.width=20, fig.height=9}
+ggplot(sig0, aes(x = Blockade, y = DwellTime, colour = amino_acid)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  facet_grid(voltage ~ amino_acid, scales = "free") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none", 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+
+# Arg
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Arg" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Arg" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Arg" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Lys
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Lys" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Lys" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Lys" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Asp
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Asp" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Asp" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Asp" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Glu
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Glu" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Glu" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Glu" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Leu
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Leu" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Leu" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Leu" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Thr
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Thr" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Thr" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Thr" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 2, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+# Trp
+
+## 50 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Trp" & voltage == 50]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(2), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 75 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Trp" & voltage == 75]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 3)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 3), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+
+## 100 mV
+
+```{r}
+sgsignals <- sig0[amino_acid == "Trp" & voltage == 100]
+B_file <- sgsignals[, as.character(unique(file_name))]
+FeatureMatrix <- lapply(B_file, function(x) {
+  # print(x)
+  fread(list.files(path = "./analysis/81.ABFProcessing/FeatureMatrix", x, full.names = TRUE))[ID %in% sgsignals$ID]
+})
+FeatureMatrix <- do.call(rbind, FeatureMatrix)
+setkey(FeatureMatrix, ID)
+FeatureMatrix <- FeatureMatrix[sgsignals$ID, ]
+FeatureMatrix <- data.frame(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix)) | colnames(FeatureMatrix) %in% c("DeltaMean", "StageSD", "CurrentSD", "Segments", "SignalCurrentPercent", "SignalCurrentWidth", "DwellTime", "Blockade"), with = F], row.names = FeatureMatrix[[1]])
+```
+
+```{r}
+LineMat <- melt.data.table(as.data.table(FeatureMatrix[, grepl("^X", colnames(FeatureMatrix))], keep.rownames = "ID"), id.vars = "ID")[variable != "DwellTime"]
+LineMat[, x := as.numeric(gsub("^X", "", variable))]
+LineMat[, Blockade := 1 - x/1000]
+LineMat <- LineMat[, .SD[, .(alpha = value/sum(value), Blockade)], ID]
+```
+
+```{r fig.width=10, fig.height=3}
+cl <- stats::kmeans(FeatureMatrix[, !is.infinite(colSums(FeatureMatrix))], 4)
+cl <- data.table(ID = names(cl$cluster), cluster = as.factor(cl$cluster))
+
+ggplot(data = merge(sgsignals, cl, by = "ID"), mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = cluster), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line")) + 
+  facet_wrap(~ plyr::mapvalues(cluster, cl[, .N, cluster][[1]], cl[, .N, cluster][, paste(cluster, N)]), nrow = 1)
+```
+
+```{r}
+ggplot(merge(LineMat, cl, by = "ID"), aes(x = Blockade, y = ID, alpha = alpha, colour = cluster)) + 
+  geom_line() + 
+  # scale_colour_gradient2(high = "red", low = "white") + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(cluster ~ ., scales = "free_y", space = "free") +
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_blank(),
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal")
+```
+
+```{r}
+cl <- cl[cluster != 2]
+```
+
+```{r eval=FALSE}
+cl[, State := ifelse(cluster %in% c(1, 4), "Sington", "Mixtrue")]
+dataset2 <- merge(sgsignals, cl[, .(ID, State)], by = "ID")
+ggplot(data = dataset2, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = State), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ State) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        # legend.position = "none", 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"))
+fwrite(dataset2, paste0("analysis/85.VoltageExperiment/03.GroupedSignals/", dataset2[, unique(amino_acid)], "_", dataset2[, unique(voltage)], ".grouped.signal.txt"), sep = "\t", quote = FALSE)
+```
+

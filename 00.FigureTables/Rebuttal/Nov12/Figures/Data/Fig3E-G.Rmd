@@ -1,0 +1,138 @@
+---
+title: "Figure 3 e-g"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(ggpubr)
+library(dplyr)
+```
+
+# Gly 
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/AtandardAA_LOD.xlsx", sheet = 1))
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, concentration2 := paste(concentration, "μM")]
+```
+
+```{r}
+Gly_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Gly_All[, A := as.character(A)]
+Gly_All <- merge(meta[, .(file_id, concentration, concentration2)], Gly_All, by.x = "file_id", by.y = "A")
+Gly_All <- Gly_All[concentration < 100]
+Gly_All[, concentration2 := factor(concentration2, levels = Gly_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+Arg_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Arg_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Arg_All[, A := as.character(A)]
+Arg_All <- merge(meta[, .(file_id, concentration, concentration2)], Arg_All, by.x = "file_id", by.y = "A")
+Arg_All[, concentration2 := factor(concentration2, levels = Arg_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+Asp_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Asp_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Asp_All[, A := as.character(A)]
+Asp_All <- merge(meta[, .(file_id, concentration, concentration2)], Asp_All, by.x = "file_id", by.y = "A")
+Asp_All[, concentration2 := factor(concentration2, levels = Asp_All[, .N, .(concentration, concentration2)][order(concentration), concentration2])]
+```
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Gly_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Gly_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Gly_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Gly_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Gly_All_Sig_Freq[, Freq := N / ValidTime]
+Gly_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Gly_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Arg_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Arg_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Arg_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Arg_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Arg_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Arg_All_Sig_Freq[, Freq := N / ValidTime]
+Arg_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Arg_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Asp_euclidean_distance_knn_selected.signals_InterTime.Rds")
+
+Asp_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Asp_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Asp_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Asp_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Asp_All_Sig_Freq[, Freq := N / ValidTime]
+Asp_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Asp_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+openxlsx::write.xlsx(list(Gly = Gly_All_Sig_Freq, Arg = Arg_All_Sig_Freq, Asp = Asp_All_Sig_Freq), "./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig3E-G.xlsx")
+```
+
+

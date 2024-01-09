@@ -1,0 +1,55 @@
+---
+title: "Figure 3 c"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+vImp <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig3D.xlsx"))
+```
+
+```{r fig.width=6, fig.height=7}
+ggplot(vImp[!is.na(x)], aes(x = x, y = Importance)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = c(0, 250, 500, 750, 1000), labels = c("X0001", "X0250", "X0500", "X0750", "X1000"), 
+                     sec.axis = dup_axis(name = "Blockade", breaks = c(0, 250, 500, 750, 1000), labels = c(1, 0.75, 0.5, 0.25, 0))) + 
+  labs(x = "Predictors", tag = "d") + 
+  theme_bw(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        plot.tag = element_text(size = 30, face = "bold"), 
+        panel.grid = element_blank())
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig3D.pdf", width = 6, height = 7)
+```
+
+
+

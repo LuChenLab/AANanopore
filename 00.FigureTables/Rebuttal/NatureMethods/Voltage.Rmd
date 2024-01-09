@@ -1,0 +1,281 @@
+---
+title: "Figure 2"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+files <- list.files("./analysis/85.VoltageExperiment/03.GroupedSignals", ".txt", recursive = T, full.names = T)
+sig0 <- do.call(rbind, lapply(files, fread))
+sig0[, voltage := factor(voltage, levels = c(50, 75, 100))]
+sig0[, amino_acid := factor(amino_acid, levels = c("Arg", "Lys", "Asp", "Glu", "Leu", "Thr", "Trp"))]
+sig0[, file_id := as.character(file_id)]
+sig0[, file_name := as.character(file_name)]
+```
+
+```{r fig.width=20, fig.height=9}
+ggplot(sig0, aes(x = Blockade, y = DwellTime, colour = amino_acid)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  facet_grid(voltage ~ amino_acid, scales = "free") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none", 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+```{r fig.width=20, fig.height=9}
+ggplot(sig0[State == "Sington"], aes(x = Blockade, y = DwellTime, colour = amino_acid)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = sig0[State == "Sington", range(Blockade)]) + 
+  facet_grid(voltage ~ amino_acid, scales = "free") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none", 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+```{r}
+SigSumm <- sig0[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                                      BlockadeMean = mean(Blockade), 
+                                      BlockadeMedian = median(Blockade), 
+                                      BlockadeQ1 = quantile(Blockade, 1/4), 
+                                      BlockadeQ3 = quantile(Blockade, 3/4), 
+                                      DwellTimeSD = sd(DwellTime), 
+                                      DwellTimeMAD = mad(DwellTime), 
+                                      DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                                      DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                                      DwellTimeMean = mean(DwellTime), 
+                                      DwellTimeMedian = median(DwellTime)), .(amino_acid, voltage)]
+```
+
+```{r}
+SigSumm[, voltage := as.numeric(as.character(voltage))]
+```
+
+```{r}
+ggplot(SigSumm, aes(x = voltage, y = BlockadeMean, colour = amino_acid)) + 
+  geom_pointrange(aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD)) + 
+  geom_line() + 
+  geom_text_repel(data = SigSumm[voltage == 50], aes(label = amino_acid)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_x_continuous(breaks = c(50, 75, 100)) + 
+  labs(x = "Voltage (mV)", y = "Blockade") + 
+  theme_light(base_size = 15) + 
+  theme(legend.title = element_blank())
+```
+
+```{r}
+SigSumm[, .(slope = coefficients(lm(BlockadeMean ~ voltage))[2], R = cor(x = voltage, y = BlockadeMean)), amino_acid][order(slope)]
+```
+
+
+
+
+```{r}
+ggplot(SigSumm, aes(x = voltage, y = DwellTimeMedian, colour = amino_acid)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_line() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(breaks = c(50, 75, 100)) + 
+  labs(x = "Voltage (mV)", y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.title = element_blank())
+```
+
+```{r}
+Sigs1 <- sig0[State == "Sington"]
+DwellTime1 <- Sigs1[, .N, .(amino_acid, voltage)]
+DwellTime <- lapply(seq_len(nrow(DwellTime1)), function(i) {
+  ls <- levels(cut_interval(Sigs1[amino_acid == DwellTime1[i, amino_acid] & voltage == DwellTime1[i, voltage], DwellTime], 5))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[amino_acid == DwellTime1[i, amino_acid] & voltage == DwellTime1[i, voltage], DwellTime], 5))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = DwellTime1[i, 1:2], A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+DwellTime1 <- do.call(rbind, DwellTime)
+DwellTime1[, A.voltage := as.numeric(as.character(A.voltage))]
+```
+
+```{r}
+ggplot(DwellTime1, aes(x = A.voltage, y = half.life, colour = A.amino_acid)) + 
+  geom_pointrange(aes(ymin = half.life - half.life_Std.Error, ymax = half.life + half.life_Std.Error)) + 
+  geom_line() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(breaks = c(50, 75, 100)) + 
+  labs(x = "Voltage (mV)", y = "Half life of dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.title = element_blank())
+```
+
+```{r}
+SigSumm[, amino_acid := as.character(amino_acid)]
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][1], sd = SigSumm[voltage == 50, BlockadeSD][1]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][2], sd = SigSumm[voltage == 50, BlockadeSD][2]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][3], sd = SigSumm[voltage == 50, BlockadeSD][3]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][4], sd = SigSumm[voltage == 50, BlockadeSD][4]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][5], sd = SigSumm[voltage == 50, BlockadeSD][5]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][6], sd = SigSumm[voltage == 50, BlockadeSD][6]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][6]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 50, BlockadeMean][7], sd = SigSumm[voltage == 50, BlockadeSD][7]), colour = aa_cols[SigSumm[voltage == 50, amino_acid][7]]) + 
+  scale_x_continuous(limits = c(0.15, 0.26)) + 
+  geom_text_repel(data = SigSumm[voltage == 50][, .(A = amino_acid, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[voltage == 50, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[voltage == 50, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "50 (mV)", strip.position = "right") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Set1")[1])) -> p1
+
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][1], sd = SigSumm[voltage == 75, BlockadeSD][1]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][2], sd = SigSumm[voltage == 75, BlockadeSD][2]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][3], sd = SigSumm[voltage == 75, BlockadeSD][3]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][4], sd = SigSumm[voltage == 75, BlockadeSD][4]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][5], sd = SigSumm[voltage == 75, BlockadeSD][5]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][6], sd = SigSumm[voltage == 75, BlockadeSD][6]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][6]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 75, BlockadeMean][7], sd = SigSumm[voltage == 75, BlockadeSD][7]), colour = aa_cols[SigSumm[voltage == 75, amino_acid][7]]) + 
+  scale_x_continuous(limits = c(0.14, 0.225)) + 
+  geom_text_repel(data = SigSumm[voltage == 75][, .(A = amino_acid, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[voltage == 75, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[voltage == 75, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "75 (mV)", strip.position = "right") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Set1")[2])) -> p2
+
+ggplot() +
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][1], sd = SigSumm[voltage == 100, BlockadeSD][1]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][1]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][2], sd = SigSumm[voltage == 100, BlockadeSD][2]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][2]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][3], sd = SigSumm[voltage == 100, BlockadeSD][3]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][3]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][4], sd = SigSumm[voltage == 100, BlockadeSD][4]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][4]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][5], sd = SigSumm[voltage == 100, BlockadeSD][5]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][5]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][6], sd = SigSumm[voltage == 100, BlockadeSD][6]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][6]]) + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = SigSumm[voltage == 100, BlockadeMean][7], sd = SigSumm[voltage == 100, BlockadeSD][7]), colour = aa_cols[SigSumm[voltage == 100, amino_acid][7]]) + 
+  scale_x_continuous(limits = c(0.13, 0.212)) + 
+  geom_text_repel(data = SigSumm[voltage == 100][, .(A = amino_acid, x = BlockadeMean, y = dnorm(BlockadeMean, BlockadeMean, BlockadeSD))], aes(x, y, label = A, colour = A)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  scale_y_continuous(breaks = c(0, SigSumm[voltage == 100, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]/2, SigSumm[voltage == 100, .SD[which.min(BlockadeSD)], ][, dnorm(BlockadeMean, BlockadeMean, BlockadeSD)]), labels = c(0, 0.5, 1)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 1.05) + 
+  labs(y = "Relative abundance", x = "Blockade") + 
+  facet_wrap(~ "100 (mV)", strip.position = "right") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank(), strip.background = element_rect(fill = RColorBrewer::brewer.pal(n = 3, "Set1")[3])) -> p3
+```
+
+```{r fig.width=6, fig.height=8}
+p1 <- p1 + theme(axis.title = element_blank())
+p2 <- p2 + theme(axis.title.x = element_blank())
+p3 <- p3 + theme(axis.title.y = element_blank())
+p1 + p2 + p3 + plot_layout(ncol = 1)
+```
+
+```{r}
+State_N <- sig0[, .(.N), .(amino_acid, voltage, State)][, .(State, N, P = N / sum(N) * 100), .(amino_acid, voltage)]
+```
+
+```{r}
+ggplot(State_N[State == "Sington"], aes(x = voltage, y = P)) + 
+  geom_point(aes(colour = amino_acid)) + 
+  geom_line(aes(x = as.numeric(voltage), colour = amino_acid)) + 
+  geom_text_repel(data = State_N[State == "Sington" & voltage == 50], aes(label = amino_acid)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(x = "Voltage (mV)", y = "Percentage of sington (%)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.title = element_blank())
+```
+
+
+```{r}
+files <- list.files("./analysis/85.VoltageExperiment/02.SignalsDistance", "IntervalTime.txt", recursive = T, full.names = T)
+time0 <- do.call(rbind, lapply(files, fread))
+time0 <- merge(merge(time0, sig0[, .(ID, amino_acid, voltage)], by.x = "SigAfter", by.y = "ID"), sig0[, .(ID, amino_acid, voltage)], by.x = "SigBefore", by.y = "ID")
+time0 <- time0[amino_acid.x == amino_acid.y]
+time0 <- time0[voltage.x == voltage.y]
+time0[, amino_acid.y := NULL]
+time0[, voltage.y := NULL]
+setnames(time0, "amino_acid.x", "amino_acid")
+setnames(time0, "voltage.x", "voltage")
+time0[, voltage := factor(voltage, levels = c(50, 75, 100))]
+time0[, amino_acid := factor(amino_acid, levels = c("Arg", "Lys", "Asp", "Glu", "Leu", "Thr", "Trp"))]
+```
+
+```{r}
+ggplot(time0, aes(x = amino_acid, y = Time2 * 1000, colour = voltage)) + 
+  geom_violin() + 
+  stat_summary(fun.data = "median_mad", position = position_dodge(width = 0.9)) + 
+  scale_y_log10() +
+  labs(y = "Interval time (ms)", x = "Amino acid") + 
+  scale_colour_brewer(palette = "Set1", guide = guide_legend(title = "Voltage (mV)")) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top")
+```
+
+

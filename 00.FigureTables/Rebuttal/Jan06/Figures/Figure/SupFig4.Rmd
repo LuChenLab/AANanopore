@@ -1,0 +1,67 @@
+---
+title: "Supplementary Figure 4"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpmisc)
+library(ggpubr)
+library(caret)
+library(gridExtra)
+```
+
+```{r}
+aaBlockade <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig2B.xlsx"))
+setnames(aaBlockade, "AminoAcid", "A")
+aaBlockade <- aaBlockade[Class != "Charged" & !A %in% c("Pro", "Cys")]
+```
+
+```{r fig.height=5.5, fig.width=6}
+ggplot(aaBlockade, aes(x = Volume, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F, size = 1.5) + 
+  geom_text_repel(aes(label = A), size = 7) + 
+  stat_cor(label.x.npc = 0.2, label.y.npc = 0.01, size = 5.5) +
+  scale_y_continuous(limits = c(0.1, 0.26)) + 
+  theme_bw(base_size = 22) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) +
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/SupFig4.pdf", width = 6, height = 5.5)
+```
+
+```{r}
+openxlsx::write.xlsx(aaBlockade, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig4.xlsx")
+```

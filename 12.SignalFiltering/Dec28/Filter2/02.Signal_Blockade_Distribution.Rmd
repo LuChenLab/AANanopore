@@ -1,0 +1,202 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+```
+
+```{r}
+plot_mix_comps <- function(x, mu, sigma, lam) {
+  lam * dnorm(x, mu, sigma)
+}
+```
+
+```{r}
+set.seed(10)
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+names(aa_cols) <- Biostrings::AA_STANDARD
+aa_cols[aa_cols == "#FFFF99"] <- "#000000"
+```
+
+# b
+
+```{r}
+L1_Files <- list.files("./analysis/12.SignalFiltering/Dec28/Filter2", "_Signal1_Mainly_L1.txt", full.names = TRUE)
+```
+
+```{r}
+L1_Mat <- lapply(L1_Files, fread)
+names(L1_Mat) <- gsub("_Signal1_Mainly_L1.txt", "", basename(L1_Files))
+L1_Mat <- data.table(amino_acid = rep(names(L1_Mat), mapply(nrow, L1_Mat)), do.call(rbind, L1_Mat))
+```
+
+```{r}
+L1_Mat[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+L1_Mat[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+L1_Mat[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+L1_Mat[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+aaBlockade <- lapply(L1_Mat[, unique(aa)], FUN = function(a) {
+  den <- L1_Mat[aa == a, density(Blockade, adjust = 5)]
+  SD <- L1_Mat[aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r fig.width=6, fig.height=8}
+library(ggrepel)
+ggplot(data = L1_Mat, mapping = aes(x = Blockade, colour = aa)) + 
+  geom_line(stat = "Density", adjust = 5) + 
+  scale_x_continuous(limits = c(0.08, 0.28)) +
+  scale_y_continuous(breaks = c(0, 75, 150), labels = c(0, 0.5, 1)) +
+  facet_wrap(~ Class, ncol = 1, strip.position = "right") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", 
+        # strip.background = element_blank(),
+        panel.grid = element_blank()) + 
+  geom_text_repel(data = aaBlockade, aes(x = x, y = y, label = aa), direction = "y", nudge_y = 0.2) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(x = "Blockade", y = "Relative abundance") -> p_b
+p_b
+```
+
+```{r fig.width=6, fig.height=8}
+g <- ggplot_gtable(ggplot_build(p_b))
+
+stripr <- which(grepl('strip-r', g$layout$name))
+fills <- RColorBrewer::brewer.pal(n = 3, "Dark2")[c(1, 3, 2)]
+k <- 1
+for (i in stripr) {
+  j <- which(grepl('rect', g$grobs[[i]]$grobs[[1]]$childrenOrder))
+  g$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+  k <- k+1
+}
+# grid::grid.draw(g)
+p_b <- as_ggplot(g)
+p_b
+```
+
+# c
+
+```{r}
+L2_Files <- list.files("./analysis/12.SignalFiltering/Dec28/Filter2", "_Signal1_Mainly_L2.txt", full.names = TRUE)
+```
+
+```{r}
+L2_Mat <- lapply(L2_Files, fread)
+names(L2_Mat) <- gsub("_Signal1_Mainly_L2.txt", "", basename(L2_Files))
+L2_Mat <- data.table(amino_acid = rep(names(L2_Mat), mapply(nrow, L2_Mat)), do.call(rbind, L2_Mat))
+```
+
+```{r}
+L2_Mat[, aa := plyr::mapvalues(amino_acid, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+L2_Mat[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+L2_Mat[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+L2_Mat[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r}
+aaBlockade <- lapply(L2_Mat[, unique(aa)], FUN = function(a) {
+  den <- L2_Mat[aa == a, density(Blockade, adjust = 5)]
+  SD <- L2_Mat[aa == a, sd(Blockade)]
+  data.table(aa = a, x = den$x[which.max(den$y)], y = max(den$y), SD)
+})
+aaBlockade <- do.call(rbind, aaBlockade)
+aaBlockade[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+aaBlockade[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+aaBlockade[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+```
+
+```{r fig.width=6, fig.height=8}
+library(ggrepel)
+ggplot(data = L2_Mat, mapping = aes(x = Blockade, colour = aa)) + 
+  geom_line(stat = "Density", adjust = 5) + 
+  scale_x_continuous(limits = c(0.17, 0.56)) +
+  scale_y_continuous(breaks = c(0, 75, 150), labels = c(0, 0.5, 1)) +
+  facet_wrap(~ Class, ncol = 1, strip.position = "right") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", 
+        # strip.background = element_blank(),
+        panel.grid = element_blank()) + 
+  geom_text_repel(data = aaBlockade, aes(x = x, y = y, label = aa), direction = "y", nudge_y = 0.2) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(x = "Blockade", y = "Relative abundance") -> p_c
+p_c
+```
+
+```{r fig.width=6, fig.height=8}
+g <- ggplot_gtable(ggplot_build(p_c))
+
+stripr <- which(grepl('strip-r', g$layout$name))
+fills <- RColorBrewer::brewer.pal(n = 3, "Dark2")[c(1, 3, 2)]
+k <- 1
+for (i in stripr) {
+  j <- which(grepl('rect', g$grobs[[i]]$grobs[[1]]$childrenOrder))
+  g$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+  k <- k+1
+}
+# grid::grid.draw(g)
+p_c <- as_ggplot(g)
+p_c
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

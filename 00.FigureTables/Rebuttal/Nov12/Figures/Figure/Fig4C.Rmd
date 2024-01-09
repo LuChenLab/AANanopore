@@ -1,0 +1,112 @@
+---
+title: "Figure 4 C"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+Sigs <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig4C.xlsx"))
+Sigs[, AA := factor(AA, levels = c("S", "P-S", "P-S + S"))]
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[AA != "P-S + S"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right", scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_stata() + 
+  scale_x_continuous(limits = c(0.1, 0.35)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+```
+
+
+```{r}
+SPTM <- Sigs[SignalCurrentPercent > 80][AA == "P-S + S" & Blockade > 0.1 & Blockade < 0.35]
+setnames(SPTM, "A", "file_id")
+SPTM[, A := ifelse(Blockade < 0.2, "S", "P-S")]
+SPTM[, D := NULL]
+SPTM <- split(SPTM, SPTM$A)
+SPTM <- lapply(SPTM, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+SPTM <- do.call(rbind, SPTM)
+```
+
+```{r}
+ggplot(SPTM[sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = file_id)) + 
+  ggforce::geom_mark_ellipse(aes(colour = A, label = A, filter = D > 0.1), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  scale_y_log10(limits = c(0.3, 50), breaks = c(0.3, 3, 30)) +
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind() + 
+  scale_x_continuous(limits = c(0.1, 0.35)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r fig.height=9, fig.width=6, echo=FALSE}
+design <- "
+  1
+  1
+  2
+"
+p1 + p2 + 
+  plot_layout(design = design)
+```
+

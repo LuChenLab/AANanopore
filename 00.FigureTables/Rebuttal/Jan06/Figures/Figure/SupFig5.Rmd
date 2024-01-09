@@ -1,0 +1,217 @@
+---
+title: "Supplementary Figure 5"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+# a 
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig5A.xlsx"))
+```
+
+```{r}
+ggplot(data = data[order(Density)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  geom_point(aes(alpha = pmin(Density + .02, 1), colour = File), size = .1) + 
+  scale_y_log10(limits = c(0.12, 1345.23)) + 
+  scale_x_continuous(limits = c(0.03, 1)) + 
+  scale_colour_brewer(palette = "Set2") + 
+  scale_fill_manual(values = c(scales::alpha("grey20", 0:99/99), RColorBrewer::brewer.pal(n = 6, name = "Dark2")), aesthetics = c("fill")) + 
+    labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+```
+
+# b
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig5BC.xlsx"))
+```
+
+```{r}
+ggplot(data = data[order(Density)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  geom_point(aes(alpha = pmin(Density + .02, 1), colour = File), size = .1) + 
+  scale_y_log10(limits = c(0.12, 1345.23)) + 
+  scale_x_continuous(limits = c(0.03, 1)) + 
+  scale_colour_brewer(palette = "Set2") + 
+  scale_fill_manual(values = c(scales::alpha("grey20", 0:99/99), RColorBrewer::brewer.pal(n = 6, name = "Dark2")), aesthetics = c("fill")) + 
+    labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+# c
+
+```{r}
+ggplot(data = data[order(Density)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(Density + .02, 1), colour = Class), size = .5) + 
+  scale_y_log10(limits = c(0.12, 1345.23)) + 
+  scale_x_continuous(limits = c(0.03, 1)) + 
+  scale_colour_brewer(palette = "Set1", direction = -1) + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  guides(alpha = "none", colour = guide_legend(reverse = T)) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = c(0.8, 0.9), 
+        legend.background = element_blank(), 
+        # plot.margin = unit(c(0, 1, 0, 1), "line"),  
+        panel.grid = element_blank()) -> p3
+```
+
+# d
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig5DE.xlsx"))
+```
+
+```{r}
+ggplot(data, aes(x = Blockade, y = DwellTime, colour = Class)) + 
+  geom_point(aes(shape = as.character(File)), alpha = 0.5) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Set2") + 
+  guides(shape = "none") + 
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.background = element_blank(), 
+        panel.grid = element_blank(), 
+        legend.box.background = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"),
+        legend.position = c(0.5, 0.9)) -> p4
+```
+
+# e
+
+```{r}
+ggplot(data, aes(x = Blockade, y = DwellTime, colour = ifelse(State == "Sington", "State 1", "State 2"))) + 
+  geom_point(aes(shape = as.character(File)), alpha = 0.5) + 
+  scale_y_log10() + 
+  guides(colour = guide_legend(nrow = 1, reverse = T), shape = "none") + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ Class) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_blank(), 
+        legend.title = element_blank(), 
+        legend.background = element_blank(), 
+        panel.grid = element_blank(), 
+        legend.box.background = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"),
+        legend.position = "none") -> p5_2
+```
+
+```{r}
+ggplot(data, aes(x = Blockade, fill = ifelse(State == "Sington", "State 1", "State 2"))) + 
+  geom_histogram(position = position_dodge(), binwidth = 0.001) + 
+  guides(fill = guide_legend(nrow = 1, reverse = F)) + 
+  facet_wrap(~ Class) + 
+  theme_minimal(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"),
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        strip.background = element_rect(size = 0), 
+        strip.text = element_blank(),
+        legend.position = c(0.7, 0.5), 
+        legend.key.width = unit(0.4, "line"), 
+        legend.box.spacing = unit(0, "line"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank()) -> p5_1
+```
+
+# f
+
+```{r}
+data <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig5F.xlsx"))
+```
+
+```{r echo=FALSE}
+ggplot(data, aes(x = Blockade, y = ID, alpha = alpha, colour = Label)) + 
+  geom_line() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  facet_grid(Label + Class ~ ., scales = "free_y", space = "free") + 
+  theme_classic(base_size = 15) + 
+  theme(axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        strip.placement = "inside", 
+        strip.text.y = element_text(angle = 0), 
+        strip.background = element_blank(), 
+        panel.background = element_blank(), 
+        plot.background = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        legend.position = "none") + 
+  labs(x = "Blockade", y = "Signal") -> p6
+```
+
+# Fig
+
+
+```{r fig.height=14, fig.width=12, echo=FALSE}
+design <- "
+  11112222
+  11112222
+  11112222
+  11112222
+  33334444
+  33334444
+  33334444
+  33334444
+  55555666
+  55555666
+  55555666
+  77777666
+  77777666
+  77777666
+  77777666
+"
+p1 + p2 + p3 + p4 + p5_1 + p6 + p5_2 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/SupFig5.pdf", width = 12, height = 14)
+```
+

@@ -1,0 +1,379 @@
+---
+title: "Figure 5 C"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(ggpubr)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+AABlockade[, A := plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+meta1 <- rbind(as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx")), 
+               as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx")), use.names = FALSE)[experiment != "EFG Rep1"]
+meta1[, experiment := gsub("EAFNL ", "", experiment)]
+meta1[, sg_files := NULL]
+meta1 <- meta1[!is.na(amino_acid)]
+```
+
+```{r}
+meta2 <- fread("./data/ChenShanchuan/20240103/meta_20240103.txt")
+meta2[amino_acid == "", amino_acid := NA]
+meta2$experiment <- paste0("Rep", as.numeric(as.factor(meta2$experiment)))
+meta2 <- meta2[!is.na(amino_acid)]
+meta2[, seq := "LNFAE"]
+```
+
+```{r}
+meta3 <- fread("./data/ChenShanchuan/20240104/meta_20240104.txt")
+meta3[amino_acid == "", amino_acid := NA]
+meta3$experiment <- paste0("Rep", as.numeric(as.factor(meta3$experiment)))
+meta3 <- meta3[!is.na(amino_acid)]
+meta3[, seq := amino_acid]
+```
+
+```{r}
+meta <- rbind(data.table(meta1, Patch = "P1"), data.table(meta2, Patch = "P2"), data.table(meta3, Patch = "P3"), fill = TRUE)
+meta$experiment <- paste0("Rep", as.numeric(as.factor(paste0(meta$Patch, meta$experiment))))
+meta <- split(meta, meta$seq)
+meta <- lapply(meta, function(x) {
+  x$experiment <- paste0("Rep", as.numeric(as.factor(x$experiment)))
+  x
+})
+meta <- do.call(rbind, meta)
+setkey(meta, seq, experiment)
+```
+
+```{r}
+files <- c(list.files("./analysis/91.RealTimeHydrolysis/01.SelectedL0", ".MainL0.txt", full.names = T), 
+           list.files("analysis/93.Revision/02.PolypeptideHydrolysis/02.SelectedL0", ".MainL0.txt", full.names = T))
+meta <- meta[mapply(meta$file_id, FUN = function(x) any(grepl(x, files)))]
+meta$sg_files <- files[mapply(meta$file_id, FUN = function(x) which(basename(files) == paste0(x, ".MainL0.txt")))]
+
+meta <- split(meta, meta$seq)
+meta <- lapply(meta, function(x) {
+  x$experiment <- paste0("Rep", as.numeric(as.factor(x$experiment)))
+  x
+})
+meta <- do.call(rbind, meta)
+setkey(meta, seq, experiment)
+meta[, Patch := NULL]
+```
+
+```{r}
+sig2 <- fread("./analysis/93.Revision/03.RealTimeHydrolysis/01.SignalPrediction/Predicted_signals.txt")
+```
+
+```{r}
+sig_N <- sig2[Pred2 != "Noise" & Delta1 > 0.95, .N, Pred1]
+sig_N[, A := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+sig_N[, A := factor(A, levels = c("A", "N", "L", "F", "E"))]
+ggplot(sig_N, aes(x = A, y = N, fill = Pred1)) + 
+  geom_col() + 
+  geom_text(aes(label = N, y = N + 400), size = 5) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Amino acid", y = "Number of events", tag = "c") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+```{r}
+ggplot(sig2[Pred2 != "Noise" & Delta1 > 0.95], aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], color = "red") + 
+  scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred1)]]), values = aa_cols[sig2[, unique(Pred1)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+```{r}
+IntervalTime <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig2C.xlsx"))
+setnames(IntervalTime, "AminoAcid", "AA")
+id2rep <- as.data.table(openxlsx::read.xlsx("./data/MetaInfomation/StandardAA_Meta_Rep.xlsx"))
+id2rep[, file_id := gsub("00000001$", "", file_id)]
+id2rep[, file_id := gsub("199999999$", "2", file_id)]
+IntervalTime <- merge(IntervalTime, id2rep[, .(file_id, rep)], by = "file_id")
+IntervalTime <- IntervalTime[, .(Frequency = mean(Frequency)), .(Class, AA, rep)]
+IntervalTime[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+od <- IntervalTime[, median(Frequency), .(Class, AA)][order(Class, V1), AA]
+IntervalTime[, AA := factor(AA, levels = od)]
+IntervalTime <- IntervalTime[, .(Mean = mean(Frequency), Median = median(Frequency)), AA]
+IntervalTime[, A := plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+ 
+# EAFNL
+
+```{r}
+EAFNL <- sig2[Pred2 != "Noise" & Delta1 > 0.95 & seq == "EAFNL"]
+EAFNL[, file_id := as.character(A)]
+# EAFNL <- data.table(EAFNL, D1 = EAFNL[, get_density(x = Blockade, y = log10(DwellTime))])
+EAFNL[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+EAFNL[, Pred1 := factor(Pred1, levels = c("E", "A", "F", "N", "L"))]
+```
+
+```{r}
+Freq_N <- EAFNL[, .N, .(seq, Pred1, experiment, file_id)]
+Freq_N <- merge(Freq_N, IntervalTime, by.x = "Pred1", by.y = "A")
+Freq_N[, N2 := N / Mean]
+Freq_N <- merge(Freq_N, Freq_N[, .SD[, .(Pred1, P = N2 / sum(N2) * 100)], by = .(seq, experiment, file_id)], by = c("seq", "experiment", "file_id", "Pred1"))
+
+ggplot(Freq_N, aes(Pred1, y = P, colour = seq)) + 
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(aes(shape = experiment), size = 2, height = 0) + 
+  scale_colour_wsj(guide = "none") + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", subtitle = "Adjusted by Median") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(face = "bold"))
+```
+
+
+```{r}
+ggplot(Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)], aes(Pred1, y = P, colour = seq)) + 
+  stat_summary(fun.data = "mean_sd", geom = "errorbar", width = 0.2) + 
+  geom_jitter(height = 0) + 
+  geom_col(data = Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)][, .(P = mean(P)), .(seq, Pred1)], 
+           mapping = aes(Pred1, y = P, fill = seq), alpha = 0.4) + 
+  scale_colour_wsj() + 
+  scale_fill_wsj() + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", subtitle = "Adjusted by Median") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none")
+```
+
+```{r}
+ggplot(Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)], aes(Pred1, y = P)) + 
+  geom_boxplot(outlier.colour = NA) +
+  geom_point(aes(colour = experiment), size = 2, height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj(guide = "none") + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", subtitle = "Adjusted by Median") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(face = "bold"))
+```
+
+
+```{r}
+ggplot(Freq_N[seq == "EAFNL", .(P = mean(P)), .(seq, experiment, Pred1)], aes(Pred1, y = P, colour = seq)) + 
+  stat_summary(fun.data = "mean_sd", geom = "errorbar", width = 0.2) + 
+  geom_col(data = Freq_N[seq == "EAFNL", .(P = mean(P)), .(seq, experiment, Pred1)][, .(P = mean(P)), .(seq, Pred1)], 
+           mapping = aes(Pred1, y = P, fill = seq), alpha = 0.4) + 
+  geom_jitter(height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj() + 
+  scale_fill_wsj() + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", tag = "b") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") 
+```
+
+Rep2: highest N
+Rep3: lowest L
+
+
+```{r fig.width=12, fig.height=6}
+Freq_N <- EAFNL[experiment != "Rep2", .N, .(seq, Pred1, experiment, file_id)]
+Freq_N <- merge(Freq_N, IntervalTime, by.x = "Pred1", by.y = "A")
+Freq_N[, N2 := N / Mean]
+Freq_N <- merge(Freq_N, Freq_N[, .SD[, .(Pred1, P = N2 / sum(N2) * 100)], by = .(seq, experiment, file_id)], by = c("seq", "experiment", "file_id", "Pred1"))
+
+
+ggplot(Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)], aes(Pred1, y = P, colour = seq)) + 
+  stat_summary(fun.data = "mean_sd", geom = "errorbar", width = 0.2) + 
+  geom_col(data = Freq_N[seq == "EAFNL", .(P = mean(P)), .(seq, experiment, Pred1)][, .(P = mean(P)), .(seq, Pred1)], 
+           mapping = aes(Pred1, y = P, fill = seq), alpha = 0.4) + 
+  geom_jitter(height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj() + 
+  scale_fill_wsj() + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n number of events", x = "Identified amino acid", tag = "b") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p1
+
+ggplot(Freq_N[, .(N = sum(N)), .(Pred1, seq)], aes(x = Pred1, y = N, fill = seq)) + 
+  geom_col() + 
+  scale_fill_wsj() + 
+  scale_y_log10() + 
+  labs(y = "Number of events", x = "Identified amino acid", tag = "b") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p2
+
+p1 + p2
+```
+
+
+
+
+
+
+
+
+
+```{r fig.width=12, fig.height=6}
+Freq_N <- EAFNL[experiment != "Rep3", .N, .(seq, Pred1, experiment, file_id)]
+Freq_N <- merge(Freq_N, IntervalTime, by.x = "Pred1", by.y = "A")
+Freq_N[, N2 := N / Mean]
+Freq_N <- merge(Freq_N, Freq_N[, .SD[, .(Pred1, P = N2 / sum(N2) * 100)], by = .(seq, experiment, file_id)], by = c("seq", "experiment", "file_id", "Pred1"))
+
+
+ggplot(Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)], aes(Pred1, y = P, colour = seq)) + 
+  stat_summary(fun.data = "mean_sd", geom = "errorbar", width = 0.2) + 
+  geom_col(data = Freq_N[seq == "EAFNL", .(P = mean(P)), .(seq, experiment, Pred1)][, .(P = mean(P)), .(seq, Pred1)], 
+           mapping = aes(Pred1, y = P, fill = seq), alpha = 0.4) + 
+  geom_jitter(height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj() + 
+  scale_fill_wsj() + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n number of events", x = "Identified amino acid", tag = "b") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p1
+
+ggplot(Freq_N[, .(N = sum(N)), .(Pred1, seq)], aes(x = Pred1, y = N, fill = seq)) + 
+  geom_col() + 
+  scale_fill_wsj() + 
+  scale_y_log10() + 
+  labs(y = "Number of events", x = "Identified amino acid", tag = "a") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p2
+
+p2 + p1
+```
+
+
+```{r}
+ECDFcumsum <- function(mat) {
+  lapply(mat[, unique(file_id)], function(fi) {
+    x <- mat[file_id == fi]
+    t1 <- x[, floor(min(StartTime))]
+    t2 <- x[, ceiling(max(StartTime))]
+    As <- x[, unique(AA)]
+    res <- lapply(As, function(i) {
+      F1 <- x[AA == i, ecdf(StartTime)]
+      data.table(AA = i, Time = seq(t1, t2, 1), ECDF = F1(seq(t1, t2, 1)), cumsum = F1(seq(t1, t2, 1)) * x[AA == i, .N])
+    })
+    data.table(file_id = fi, do.call(rbind, res))
+  }) -> res
+  do.call(rbind, res)
+}
+```
+
+```{r}
+EAFNL[, AA := Pred1]
+tab <- ECDFcumsum(EAFNL)
+tab[, AminoAcid := plyr::mapvalues(AA, names(AMINO_ACID_CODE), AMINO_ACID_CODE)]
+ggplot(tab[file_id %in% c("21807004.1")], aes(x = Time, y = cumsum, colour = AminoAcid)) + 
+  geom_smooth(span = 1) + 
+  geom_label_repel(data = tab[file_id %in% c("21807004.1"), .SD[which.max(Time)], .(AA, file_id)], aes(label = AA)) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = guide_legend(override.aes = list(size = 1))) + 
+  labs(y = "Cumulative events", x = "Real-time (s)", tag = "c") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        plot.tag = element_text(face = "bold"), 
+        legend.position = "none") -> p3
+p3
+```
+
+```{r fig.width=16, fig.height=5}
+p2 + p1 + p3
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Response/Sequencing.pdf", width = 16, height = 5)
+```
+
+

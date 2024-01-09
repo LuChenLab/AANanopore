@@ -1,0 +1,3646 @@
+---
+title: "Signal of each amino acid"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggforce)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  res <- IRanges(start = x[start(res)], end = x[end(res)])
+  end(res[length(res)]) <- max(x)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+densityPeak <- function(x, bw = 0.01, peaks = 2, n = 1024, from = 0, to = 1, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  dx <- attr(ps, "peaks")
+  dy <- den$y[den$x %in% attr(ps, "peaks")]
+  dy <- dy/max(dy)
+  
+  dx2 <- dx[dx <= dx[which.max(dy)]]
+  dy2 <- dy[dx <= dx[which.max(dy)]]
+  
+  dx2 <- dx2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  dy2 <- dy2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  res <- sort(dx2, decreasing = T)
+  df <- mean(abs(diff(den$y)))
+  CI <- mapply(res, FUN = function(i) {
+    from <- with(den, x[x < i])[max(start(IRanges(diff(with(den, y[x < i])) > mean(abs(diff(with(den, y[x < i])))))))]
+    to <- with(den, x[x > i])[min(end(IRanges(diff(with(den, y[x > i])) < mean(abs(diff(with(den, y[x > i])))))))]
+    min(c(i - from, to - i))
+  })
+  attr(res, "CI") <- CI
+  if(plot) {
+    plot(den)
+    abline(v = res, lty = 2, col = 2)
+    abline(v = res - attr(res,"CI"), lty = 2, col = 3)
+    abline(v = res + attr(res,"CI"), lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+meta1 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 1, cols = 1:7))
+meta2 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 2, cols = 1:7))
+meta3 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 3, cols = 1:7))
+meta4 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 4, cols = 1:7))
+meta <- rbind(meta1, meta2, meta3, meta4, use.names = FALSE)
+colnames(meta) <- c("file_name", "date", "amino_acid", "concentration", "start_time", "end_time", "type")
+meta[amino_acid == "cys", amino_acid := "Cys"]
+meta <- meta[concentration == 0 | amino_acid == "blank"]
+meta$file_path <- mapply(meta$file_name, FUN = function(x) list.files("./data", recursive = TRUE, full.names = TRUE, pattern = as.character(x))[1])
+meta <- meta[!is.na(file_path)]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+# meta <- meta[!grepl("abf", file_name)]
+meta[, file_name := gsub(".abf$", "", file_name)]
+meta <- meta[file_name %in% gsub("RawSignal_", "", gsub(".MainL0.txt", "", list.files("./analysis/22.SignalSelecting/03.DifferentStates/Background/")))]
+```
+
+# Ala
+
+```{r}
+aat <- "Ala"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+fill_cols <- c("white", colorRampPalette(RColorBrewer::brewer.pal(n = 9, name = "Reds"))(99))
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.002)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.002)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0015)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0015)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+
+# Arg
+
+```{r}
+aat <- "Arg"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.002)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.002)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Asn
+
+```{r}
+aat <- "Asn"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.002)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.002)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Asp
+
+```{r}
+aat <- "Asp"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0017)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0017)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Gln
+
+```{r}
+aat <- "Gln"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0035)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0035)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Glu
+
+```{r}
+aat <- "Glu"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0035)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0035)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Ile
+
+```{r}
+aat <- "Ile"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.004)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.004)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+
+# Leu
+
+```{r}
+aat <- "Leu"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.001)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.001)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Met
+
+```{r}
+aat <- "Met"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0035)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0035)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Phe
+
+```{r}
+aat <- "Phe"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.00289)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.00289)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.003)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.003)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Pro
+
+```{r}
+aat <- "Pro"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0046)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0046)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.009)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.009)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Ser
+
+```{r}
+aat <- "Ser"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0024)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0024)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0011)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0011)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Thr
+
+```{r}
+aat <- "Thr"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0024)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0024)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0015)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0015)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Trp
+
+```{r}
+aat <- "Trp"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0060)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0060)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0068)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0068)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Tyr
+
+```{r}
+aat <- "Tyr"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.003)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.003)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+```
+
+```{r}
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .7 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .7 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0044)
+```
+
+```{r}
+length(Sig_S1)
+length(Sig_S2)
+sum(unique(State1$ID) %in% c(Sig_S1, Sig_S2))
+mean(unique(State1$ID) %in% c(Sig_S1, Sig_S2))
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0044)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Val
+
+```{r}
+aat <- "Val"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0021)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0021)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0038)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0038)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Gly
+
+```{r}
+aat <- "Gly"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0017)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0017)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.0016)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.0016)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# Lys
+
+```{r}
+aat <- "Lys"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, peaks = 4, bw = 0.0045)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 4, bw = 0.0045)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L != "State1", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(inrange(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | inrange(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 4, bw = 0.009)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 4, bw = 0.009)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# His
+
+```{r}
+aat <- "His"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+His1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+His2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "2_State1.txt")), error = function(e) NULL)
+State1 <- rbind(His1, His2)
+dataset[ID %in% His1$ID, Group := "His1"]
+dataset[ID %in% His2$ID, Group := "His2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "His1", "His2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(His1$DwellTime, His2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, label = Group, filter = Group != 'Noise'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1_1 <- SignalCurrent[ID %in% His1[A == aat, ID]]
+SignalCurrent_State1_1$x <- SignalCurrent_State1_1$x/max(SignalCurrent_State1_1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1_1$D <- SignalCurrent_State1_1[, get_density(x = x, y = Current)]
+
+SignalCurrent_State1_2 <- SignalCurrent[ID %in% His2[A == aat, ID]]
+SignalCurrent_State1_2$x <- SignalCurrent_State1_2$x/max(SignalCurrent_State1_2$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1_2$D <- SignalCurrent_State1_2[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1_1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1_1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4_1
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1_2, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1_2[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4_2
+```
+
+```{r}
+p4_1
+p4_2
+```
+
+```{r}
+den <- density(SignalCurrent_State1_1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1_1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+densityPeak(x = SignalCurrent_State1_1[, Current], plot = T, bw = 0.002)
+```
+
+
+```{r}
+ps_1 <- densityPeak(x = SignalCurrent_State1_1[, Current], plot = F, peaks = 2, bw = 0.002)
+ps_1 <- data.table(x = ps_1, CI = attr(ps_1, "CI"), y = mapply(ps_1, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps_1$L <- paste0("State", seq_len(nrow(ps_1)))
+ps_1[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1_1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps_1[, x], labels = ps_1[, L]) + 
+  scale_y_continuous(limits = c(0, ps_1[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps_1, mapping = aes(x = x, y = y + ps_1[, max(y) * .1], label = B), min.segment.length = ps_1[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5_1
+```
+
+
+
+```{r}
+den <- density(SignalCurrent_State1_2[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1_2[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+densityPeak(x = SignalCurrent_State1_2[, Current], plot = T, bw = 0.002143)
+```
+
+
+```{r}
+ps_2 <- densityPeak(x = SignalCurrent_State1_2[, Current], plot = F, peaks = 2, bw = 0.002143)
+ps_2 <- data.table(x = ps_2, CI = attr(ps_2, "CI"), y = mapply(ps_2, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps_2$L <- paste0("State", seq_len(nrow(ps_2)))
+ps_2[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1_2, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps_2[, x], labels = ps_2[, L]) + 
+  scale_y_continuous(limits = c(0, ps_2[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps_2, mapping = aes(x = x, y = y + ps_2[, max(y) * .1], label = B), min.segment.length = ps_2[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5_2
+```
+
+
+```{r}
+S1_1 <- ps_1[L == "State1", .(start = B - CI, end = B + CI)]
+S2_1 <- ps_1[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12_1 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1_1$start, S1_1$end)), PS2 = mean(between(1 - Current, S2_1$start, S2_1$end))), ID]
+S12_1 <- merge(dataset, S12_1, by = "ID")
+Sig_S1_1 <- S12_1[ID %in% His1[A == aat, ID] & PS1 > .75 & PS2 == 0, ID]
+Sig_S2_1 <- S12_1[PS2 > 0.1 & PS1 + PS2 > .75 & (between(Blockade, S1_1$start, S1_1$end) | between(Blockade, S2_1$start, S2_1$end)), ID]
+
+dataset_S1_1 <- dataset[ID %in% Sig_S1_1]
+dataset_S2_1 <- dataset[ID %in% Sig_S2_1]
+densityPeak(x = dataset_S2_1[, Blockade], plot = T, peaks = 2, bw = 0.002)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2_1[, Blockade], plot = F, peaks = 2, bw = 0.002)
+ps2 <- data.table(start = ps2-attr(ps2,"CI"), end = ps2+attr(ps2,"CI"))
+dataset_S2_1 <- dataset_S2_1[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2_1$D <- dataset_S2_1[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1_1[, ID], dataset_S2_1[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7_1
+p7_1
+```
+
+```{r}
+S1_2 <- ps_2[L == "State1", .(start = B - CI, end = B + CI)]
+S2_2 <- ps_2[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID] & !ID %in% c(dataset_S1_1[, ID], dataset_S2_1[D > 0, ID])]
+S12_2 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1_2$start, S1_2$end)), PS2 = mean(between(1 - Current, S2_2$start, S2_2$end))), ID]
+S12_2 <- merge(dataset, S12_2, by = "ID")
+
+S1_2 <- His2[, .(start = min(Blockade), end = max(Blockade))]
+
+Sig_S1_2 <- S12_2[ID %in% His2[A == aat, ID] & PS1 > .5 & PS2 == 0, ID]
+Sig_S2_2 <- S12_2[!ID %in% Sig_S1_2 & PS1 > 0.1 & PS2 > 0.1 & PS1 + PS2 > .5 & (between(Blockade, S1_2$start, S1_2$end) | between(Blockade, S2_2$start, S2_2$end)), ID]
+
+dataset_S1_2 <- dataset[ID %in% Sig_S1_2]
+dataset_S2_2 <- dataset[ID %in% Sig_S2_2]
+densityPeak(x = dataset_S2_2[, Blockade], plot = T, peaks = 3, bw = 0.003)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2_2[, Blockade], plot = F, peaks = 3, bw = 0.003)
+ps2 <- data.table(start = ps2-attr(ps2,"CI"), end = ps2+attr(ps2,"CI"))
+ps2 <- ps2[c(2, 3), ]
+dataset_S2_2 <- dataset_S2_2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2_2$D <- dataset_S2_2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1_2[, ID], dataset_S2_2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7_2
+p7_2
+```
+
+
+```{r fig.height=8, fig.width=8}
+p7_1 / p7_2
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4_1 + p7_1 + p5_1 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "1_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4_2 + p7_2 + p5_2 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "2_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps_1, State1 = dataset_S1_1[, ID], State2 = dataset_S2_1[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/His1_State_Signals.Rds"))
+```
+
+```{r}
+res <- list(Blockade = ps_2, State1 = dataset_S1_2[, ID], State2 = dataset_S2_2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/His2_State_Signals.Rds"))
+```
+
+
+# Cys
+
+```{r}
+aat <- "Cys"
+bgsignal <- unique(paste0("./analysis/22.SignalSelecting/03.DifferentStates/Background/RawSignal_", meta[amino_acid == aat, file_name], ".MainL0.txt"))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "MainL0.txt", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State2'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.2, "line"), radius = unit(0.2, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State2[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State2[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State2[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, peaks = 1, bw = 0.00245)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 1, bw = 0.00245)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+```{r fig.height=7, fig.width=8}
+design <- "
+  1122
+  3334
+"
+# p6 <- p4 + p5 + plot_layout(widths = c(3, 1), nrow = 1)
+# p8 <- p1 + p2 + plot_layout(widths = c(1, 1), nrow = 1)
+p1 + p2 + p4 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 8, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State2 = State2[, unique(ID)])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```
+
+# CbC
+
+```{r}
+aat <- "CbC"
+bgsignal <- unique(list.files("./analysis/22.SignalSelecting/03.DifferentStates/CbC", "Background_RawSignal_", full.names = T))
+bgsignal <- do.call(rbind, lapply(bgsignal, fread))
+bgsignal$D <- bgsignal[, get_density(x = Blockade, y = log10(DwellTime))]
+
+dataset <- do.call(rbind, lapply(list.files(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat), "CbC_RawSignal", full.names = T), fread))
+dataset$File <- paste0("File", stringr::str_remove_all(dataset$ID, "_([[:digit:]]+)$"))
+State1 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State1.txt")), error = function(e) NULL)
+State2 <- tryCatch(fread(paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/", aat, "_State2.txt")), error = function(e) NULL)
+dataset[ID %in% State1$ID, Group := "State1"]
+dataset[ID %in% State2$ID, Group := "State2"]
+dataset[is.na(Group), Group := "Noise"]
+dataset$D <- dataset[, get_density(x = Blockade, y = log10(DwellTime))]
+dataset[, Group := factor(Group, levels = c("Noise", "State1", "State2"))]
+setkey(dataset, Group)
+data1 <- dataset[DwellTime <= max(c(State1$DwellTime, State2$DwellTime)) & Blockade < 0.62]
+```
+
+```{r}
+ggplot(data = bgsignal, mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(colour = pmin(D + .1, 1)), size = .1) + 
+  scale_y_log10(limits = data1[, range(DwellTime)]) + 
+  scale_x_continuous(limits = data1[, range(Blockade)]) + 
+  scale_colour_gradient2(high = "#67000D") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        # axis.title.x = element_blank(), 
+        # axis.text.x = element_blank(),
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p1
+
+ggplot(data = data1[order(D)], mapping = aes(x = Blockade, y = DwellTime)) + 
+  geom_point(aes(alpha = pmin(D + .02, 1), colour = File), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Dark2") + 
+  scale_fill_manual(values = c(scales::alpha("#67000D", 0:99/99), RColorBrewer::brewer.pal(n = 4, name = "Dark2")), aesthetics = c("fill")) + 
+  ggforce::geom_mark_hull(aes(group = Group, filter = Group == 'State1'), colour = "grey30", concavity = 1e10, 
+                          expand = unit(0.1, "line"), radius = unit(0.1, "line"), con.cap = 0, label.fontsize = 9, 
+                          label.minwidth = unit(0, "mm"), label.hjust = 1) +
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        plot.margin = unit(c(0, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+```
+
+```{r}
+file_name <- State1[A == aat, gsub("File", "", unique(File))]
+if(aat == "CbC") {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/03.MixtureAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+} else {
+  SignalCurrent <- mapply(function(x) list.files("./analysis/21.ABFProcessing/01.StandardAA/SignalCurrent", x, recursive = T, full.names = T), file_name)
+}
+SignalCurrent <- lapply(SignalCurrent, readRDS)
+SignalCurrent <- do.call(rbind, SignalCurrent)
+SignalCurrent <- SignalCurrent[, .(Current, x = seq_len(nrow(.SD))), ID]
+
+SignalCurrent_State1 <- SignalCurrent[ID %in% State1[A == aat, ID]]
+SignalCurrent_State1$x <- SignalCurrent_State1$x/max(SignalCurrent_State1$x)*State1[A == aat, max(DwellTime)]
+SignalCurrent_State1$D <- SignalCurrent_State1[, get_density(x = x, y = Current)]
+```
+
+```{r}
+ggplot(data = SignalCurrent_State1, mapping = aes(x = x, y = Current)) + 
+  geom_line(aes(colour = ID), size = .1) + 
+  geom_density_2d_filled(aes(fill = ..level..), contour_var = "ndensity", breaks = seq(0, 1, length.out = 100), alpha = .5) + 
+  scale_colour_manual(values = rep("black", SignalCurrent_State1[, length(unique(ID))])) +
+  scale_fill_manual(values = fill_cols, aesthetics = c("fill")) + 
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1), labels = rev(c("0.00", "0.25", "0.50", "0.75", "1.00"))) + 
+  guides(colour = "none", fill = "none") + 
+  labs(y = "Blockade", x = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) -> p4
+
+den <- density(SignalCurrent_State1[, Current], from = 0, to = 1, bw = 0.01, n = 1000)
+den <- with(den, data.table(x, y))
+hist <- hist(SignalCurrent_State1[, Current], breaks = 100, plot = F)
+den$y <- den$y/max(den$y)*max(hist$counts)
+# hist(SignalCurrent_State1[, Current], breaks = 100)
+# lines(den$x, den$y)
+densityPeak(x = SignalCurrent_State1[, Current], plot = T, bw = 0.0017)
+```
+
+
+```{r}
+ps <- densityPeak(x = SignalCurrent_State1[, Current], plot = F, peaks = 2, bw = 0.0017)
+ps <- data.table(x = ps, CI = attr(ps, "CI"), y = mapply(ps, FUN = function(i) den[which.min(abs(x - i)), y]))
+ps$L <- paste0("State", seq_len(nrow(ps)))
+ps[, B := round(1 - x, 3)]
+
+ggplot(SignalCurrent_State1, aes(x = Current)) + 
+  geom_histogram(binwidth = 0.01, fill = "grey") +
+  scale_x_continuous(limits = c(0, 1), breaks = ps[, x], labels = ps[, L]) + 
+  scale_y_continuous(limits = c(0, ps[, max(y)] * 1.25)) + 
+  geom_line(data = den, mapping = aes(x = x, y = y), colour = "#A50F15") + 
+  geom_text_repel(data = ps, mapping = aes(x = x, y = y + ps[, max(y) * .1], label = B), min.segment.length = ps[, max(y)], angle = 90, colour = "red", nudge_y = 1, direction = "x") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(panel.grid = element_blank(), 
+        axis.title = element_blank(), 
+        plot.tag = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "line"),
+        axis.text.x = element_blank()) -> p5
+```
+
+
+```{r}
+S1 <- ps[L == "State1", .(start = B - CI, end = B + CI)]
+S2 <- ps[L == "State2", .(start = B - CI, end = B + CI)]
+SignalCurrent_Main0 <- SignalCurrent[ID %in% dataset[A == aat, ID]]
+S12 <- SignalCurrent_Main0[, .(PS1 = mean(between(1 - Current, S1$start, S1$end)), PS2 = mean(between(1 - Current, S2$start, S2$end))), ID]
+S12 <- merge(dataset, S12, by = "ID")
+Sig_S1 <- S12[ID %in% State1[A == aat, ID] & PS1 > .8 & PS2 == 0, ID]
+Sig_S2 <- S12[PS2 > 0.1 & PS1 + PS2 > .8 & (between(Blockade, S1$start, S1$end) | between(Blockade, S2$start, S2$end)), ID]
+
+dataset_S1 <- dataset[ID %in% Sig_S1]
+dataset_S2 <- dataset[ID %in% Sig_S2]
+densityPeak(x = dataset_S2[, 1 - Blockade], plot = T, peaks = 2, bw = 0.002)
+```
+
+```{r}
+ps2 <- densityPeak(x = dataset_S2[, 1 - Blockade], plot = F, peaks = 2, bw = 0.002)
+ps2 <- data.table(start = 1-ps2-attr(ps2,"CI"), end = 1-ps2+attr(ps2,"CI"))
+dataset_S2 <- dataset_S2[inrange(Blockade, ps2$start, ps2$end)]
+dataset_S2$D <- dataset_S2[, get_density(x = Blockade, y = log10(DwellTime))]
+
+ggplot(data = data1[ID %in% c(dataset_S1[, ID], dataset_S2[D > 0, ID])], mapping = aes(x = Blockade, y = DwellTime, colour = File)) + 
+  geom_point(alpha = 0.5, size = .3) + 
+  scale_y_log10() + 
+  # scale_x_continuous(limits = c(0, 0.62)) +
+  scale_colour_brewer(palette = "Dark2") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "none", 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.margin = unit(c(0, 0, 1, 1), "line")) + 
+  facet_wrap(~ ifelse(ID %in% Sig_S1, "State1", "State2"), ncol = 2) -> p7
+p7
+```
+
+```{r fig.height=7, fig.width=10}
+design <- "
+  11111111133333333555
+  22222222244444444444
+"
+p1 + p2 + p4 + p7 + p5 + 
+  plot_layout(design = design) + 
+  plot_annotation(tag_levels = 'a')
+ggsave(paste0("./analysis/22.SignalSelecting/03.DifferentStates/00.SignalPlot/", aat, "_State_Signals.pdf"), width = 10, height = 7)
+```
+
+```{r}
+res <- list(Blockade = ps, State1 = dataset_S1[, ID], State2 = dataset_S2[D > .1, ID])
+saveRDS(res, paste0("./analysis/22.SignalSelecting/03.DifferentStates/", aat, "/State_Signals.Rds"))
+```

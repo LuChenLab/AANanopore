@@ -1,0 +1,415 @@
+---
+title: "Figure 6"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+# E
+
+```{r}
+abf_j <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 1))
+aasumm2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 2))
+si <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 3))
+abf_i <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 4))
+aasumm1 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 5))
+PreSig <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6E.xlsx", 6))
+```
+
+```{r fig.width=7, fig.height=3}
+L0_2 <- 116.6835
+ggplot() + 
+  geom_rect(data = aasumm2, aes(xmin = abf_j[, min(Time)], xmax = abf_j[, max(Time)], ymin = ymin / L0_2, ymax = ymax / L0_2, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_j, mapping = aes(x = Time, y = pA / L0_2), size = 0.1) + 
+  geom_text(data = si, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0_2 - 0.1, label = Pred2), direction = "y", size = 6) +
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm2[, y / L0_2], labels = aasumm2[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(1282.65, 1282.65 + 0.1, 1282.65 + 0.2, 1282.65 + 0.3, 1282.65 + 0.4, 1282.65 + 0.5), labels = c(0, 0.1, 0.2, 0.3, 0.4, 0.5)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Normalized current amplitude") + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold"), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p1
+p1
+```
+
+
+```{r fig.width=7, fig.height=3}
+L0 <- 111.9369
+ggplot() + 
+  geom_rect(data = aasumm1, aes(xmin = abf_i[, min(Time)], xmax = abf_i[, max(Time)], ymin = ymin / L0, ymax = ymax / L0, fill = A), alpha = 0.3) + 
+  geom_step(data = abf_i, mapping = aes(x = Time, y = pA / L0), size = 0.1) + 
+  geom_text(data = PreSig, aes(x = StartTime + (EndTime - StartTime) / 2, y = SignalCurrent / L0 - 0.2, label = Pred2), direction = "y", size = 6) + 
+  scale_y_continuous(n.breaks = 4, sec.axis = dup_axis(breaks = aasumm1[, y / L0], labels = aasumm1[, plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))], guide = guide_axis(n.dodge = 1))) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), breaks = c(248 - 0.52, 248 - 0.52 + 0.1, 248 - 0.52 + 0.2, 248 - 0.52 + 0.3, 248 - 0.52 + 0.4, 248 - 0.52 + 0.5), labels = c(0, 0.1, 0.2, 0.3, 0.4, 0.5)) +
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Recording time (s)", y = "Normalized current amplitude") + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p2
+p2
+```
+
+```{r}
+p1 <- p1 + theme(axis.title = element_blank(), plot.margin = unit(c(1, 1, 0, 1), "line"))
+p2 <- p2 + theme(axis.title.y = element_text(hjust = -.15), plot.margin = unit(c(0, 1, 1, 1), "line"))
+```
+
+```{r fig.width=8, fig.height=6}
+p1 + p2 + 
+  plot_layout(ncol = 1)
+# ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6E.pdf")
+```
+
+
+# F
+
+
+```{r}
+LFGV <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6F.xlsx", 1))
+LSGV <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6F.xlsx", 2))
+```
+
+```{r}
+ggplot(data = LFGV[sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = AminoAcid, alpha = Density), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.11, 0.23)) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_bw(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p3
+p3
+```
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[AminoAcid %in% x[, .N, AminoAcid][N > 3, AminoAcid]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = AminoAcid, colour = AminoAcid), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+AADensityPlot1(x = LFGV, target = c("Gly", "Leu", "Val", "Phe")) -> p4
+p4 <- p4 + scale_x_continuous(limits = c(0.11, 0.23))
+p4
+```
+
+```{r}
+ggplot(data = LSGV[sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = AminoAcid, alpha = Density), size = 1) + 
+  scale_y_log10(limits = c(1, 30)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.11, 0.23)) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_bw(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p5
+p5
+```
+
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[AminoAcid %in% x[, .N, AminoAcid][N > 3, AminoAcid]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = AminoAcid, colour = AminoAcid), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), 
+                      size = 5, direction = "y", nudge_y = -.05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+AADensityPlot1(x = LSGV, target = c("Gly", "Leu", "Ser", "Val")) -> p6
+p6 <- p6 + scale_x_continuous(limits = c(0.11, 0.23))
+p6 <- p6 + scale_y_reverse()
+p6
+```
+
+```{r}
+p4 <- p4 + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(1, 1, 0, 1), "line"), plot.tag = element_text(face = "bold"))
+p6 <- p6 + theme_void(base_size = 22) + theme(legend.position = "none", plot.margin = unit(c(0, 1, 1, 1), "line"))
+p5 <- p5 + theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.margin = unit(c(0, 1, 0, 1), "line"))
+```
+
+```{r}
+p3 <- p3 + theme(axis.title.y = element_blank(), plot.margin = unit(c(1, 1, 0, 1), "line"))
+p5 <- p5 + theme(axis.title.y = element_text(hjust = -.5))
+```
+
+```{r fig.width=7, fig.height=6}
+p4 + p3 + p5 + p6 + 
+  plot_layout(ncol = 1)
+# ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6F.pdf")
+```
+
+
+# G
+
+
+```{r}
+polyp <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6G.xlsx"))
+AADensityPlot2 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[AminoAcid %in% x[, .N, AminoAcid][N > 20, AminoAcid]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = AminoAcid, colour = AminoAcid), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(a_cols), values = a_cols) + 
+    scale_colour_manual(breaks = names(a_cols), values = a_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(a_cols), colour = a_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+```
+
+```{r}
+p7 <- AADensityPlot2(x = polyp[Polypeptide == "LVFFA"], target = AMINO_ACID_CODE[unlist(strsplit("LVFFA", ""))]) + 
+  # labs(y = "LVFFA", tag = "h") + 
+  labs(y = "LVFFA") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold"), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line.y = element_line(), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p7
+```
+
+
+```{r}
+p8 <- AADensityPlot2(x = polyp[Polypeptide == "LVFFAG"], target = AMINO_ACID_CODE[unlist(strsplit("LVFFAG", ""))]) + 
+  labs(y = "LVFFAG") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line.y = element_line(), 
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p8
+```
+
+
+```{r}
+p9 <- AADensityPlot2(x = polyp[Polypeptide == "LVFFAK"], target = AMINO_ACID_CODE[unlist(strsplit("LVFFAK", ""))]) + 
+  labs(y = "LVFFAK") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line = element_line(), 
+        axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        legend.position = "none")
+p9
+```
+
+# H
+
+```{r}
+polyp <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6H.xlsx"))
+```
+
+```{r}
+p10 <- AADensityPlot2(x = polyp[Polypeptide == "FHL"], target = c("Phe", "His1", "His2", "Leu")) + 
+  # labs(y = "FHL", tag = "g") + 
+  labs(y = "FHL") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold"), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line.y = element_line(), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p10
+```
+
+```{r}
+p11 <- AADensityPlot2(x = polyp[Polypeptide == "FYSL"], target = AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))]) + 
+  labs(y = "FYSL") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line.y = element_line(), 
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p11
+```
+
+```{r}
+p12 <- AADensityPlot2(x = polyp[Polypeptide == "LEF"], target = AMINO_ACID_CODE[unlist(strsplit("LEF", ""))]) + 
+  labs(y = "LEF") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_bw(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        # axis.line.y = element_blank(), 
+        panel.grid = element_blank(), 
+        panel.border = element_blank(), 
+        axis.line = element_line(), 
+        axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        legend.position = "none")
+p12
+```
+
+
+
+
+```{r}
+cmd_raw_result <- openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig6I.xlsx")
+```
+
+```{r fig.width=7, fig.height=8}
+ggplot(cmd_raw_result, aes(x = Dim.1, Dim.2, colour = Peptide)) + 
+  ggforce::geom_mark_ellipse(expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  ggforce::geom_mark_ellipse(aes(label = Peptide), expand = unit(0, "line"), 
+                             label.colour = "grey", con.colour = "grey", con.cap = 0, con.border = "none", con.type = "straight") + 
+  geom_point(size = 2) + 
+  scale_colour_brewer(palette = "Paired", guide = guide_legend(nrow = 3)) + 
+  # labs(tag = "i") + 
+  theme_bw(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.text = element_text(colour = "black"), 
+        axis.title = element_text(colour = "black"), 
+        legend.position = "top", 
+        # legend.spacing = unit(1, 'cm'), 
+        legend.key.size = unit(1, "cm"), 
+        plot.tag = element_text(face = "bold"), 
+        legend.title = element_blank()) -> p13
+p13
+```
+
+
+```{r fig.width=9.6, fig.height=6}
+p1 + p2 + 
+  plot_layout(ncol = 1)
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6E.pdf", width = 9.6, height = 6)
+```
+
+```{r fig.width=9.6, fig.height=6}
+p4 + p3 + p5 + p6 + 
+  plot_layout(ncol = 1)
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6F.pdf", width = 9.6, height = 6)
+```
+
+
+```{r fig.height=8, fig.width=10, echo=FALSE}
+design <- "
+  14
+  25
+  36
+"
+p7 + p8 + p9 + p10 + p11 + p12 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6GH.pdf", width = 9, height = 7)
+```
+
+
+```{r fig.width=7, fig.height=8}
+p13
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/Fig6I.pdf", width = 7, height = 8)
+```
+

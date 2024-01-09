@@ -1,0 +1,70 @@
+---
+title: "Supplementary Figure 6 e"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(gridExtra)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(ggpp)
+```
+
+```{r}
+abf1 <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21207028.Rds")
+data1 <- abf1[round(Time) == 223]
+```
+
+```{r}
+abf2 <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_21208000.Rds")
+data2 <- abf2[round(Time) == 437]
+```
+
+```{r}
+openxlsx::write.xlsx(list(data1, data2), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6E.xlsx")
+```
+
+```{r}
+ggplot() + 
+  geom_step(data = data1, mapping = aes(x = Time, y = pA), size = 0.1) + 
+  scale_y_continuous(n.breaks = 4) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), n.breaks = 5, labels = c(0, 0.25, 0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Current (pA)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank())
+```
+
+```{r}
+ggplot() + 
+  geom_step(data = data2, mapping = aes(x = Time, y = pA), size = 0.1) + 
+  scale_y_continuous(n.breaks = 4) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), n.breaks = 5, labels = c(0, 0.25, 0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Current (pA)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank())
+```

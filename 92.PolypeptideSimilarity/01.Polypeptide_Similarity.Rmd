@@ -1,0 +1,496 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+SigSumm <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta <- meta[!is.na(amino_acid)]
+```
+
+```{r}
+EAFNL1 <- fread("./analysis/91.RealTimeHydrolysis/04.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL2 <- fread("./analysis/91.RealTimeHydrolysis/34.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL <- rbind(EAFNL1, EAFNL2)
+EAFNL[, A := as.character(A)]
+EAFNL <- merge(meta, EAFNL, by.x = "file_id", by.y = "A")
+```
+
+
+
+
+```{r}
+LVFAG <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAG_prediction_merge.xlsx"))
+LVFAG <- LVFAG[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LVFAK <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAK_prediction_merge.xlsx"))
+LVFAK <- LVFAK[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LVFA <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFA_prediction_merge.xlsx"))
+LVFA <- LVFA[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+```
+
+```{r}
+LFGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LFGV_prediction.txt", sep = "\t")
+LFGV <- LFGV[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LSGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LSGV_prediction.txt", sep = "\t")
+LSGV <- LSGV[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+```
+
+```{r}
+FHL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FHL_prediction.txt", sep = "\t")
+FHL <- FHL[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+FYSL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FYSL_prediction.txt", sep = "\t")
+FYSL <- FYSL[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+LEF <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/LEF_prediction.txt", sep = "\t")
+LEF <- LEF[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+```
+
+```{r}
+polyp <- rbind(data.table(PPT = "LVFFAG", LVFAG), 
+               data.table(PPT = "LVFFAK", LVFAK), 
+               data.table(PPT = "LVFFA", LVFA), 
+               data.table(PPT = "LFGV", LFGV), 
+               data.table(PPT = "LSGV", LSGV), 
+               data.table(PPT = "FHL", FHL), 
+               data.table(PPT = "FYSL", FYSL), 
+               data.table(PPT = "LEF", LEF))
+polyp <- rbind(polyp, EAFNL[, .(PPT = seq, file_id, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)])
+polyp <- polyp[file_id != "21827012.1"]
+```
+
+
+```{r fig.width=15, fig.height=8}
+polyp_N <- polyp[Prob > 0.7 & Blockade < 0.3, .N, .(PPT, Pred)]
+polyp_N[, Pred := plyr::mapvalues(Pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+ggplot(polyp_N, aes(x = Pred, y = N)) + 
+  geom_col() + 
+  facet_wrap(~PPT, scales = "free", nrow = 2) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        legend.title = element_blank())
+  
+```
+
+```{r}
+file.exists(paste0("./analysis/81.ABFProcessing/SignalCurrent/SignalCurrent_", polyp[, gsub("\\.[0-9]$", "", unique(file_id))], ".Rds"))
+```
+
+```{r}
+CurrList <- mclapply(polyp[, unique(file_id)], function(fi) {
+  # print(fi)
+  Curr <- readRDS(paste0("./analysis/81.ABFProcessing/SignalCurrent/SignalCurrent_", gsub("\\.[0-9]$", "", fi), ".Rds"))
+  stopifnot(all(polyp[file_id == fi, ID] %in% Curr[, ID]))
+  Curr[ID %in% polyp[file_id == fi, ID]]
+}, mc.cores = 20)
+```
+
+```{r}
+which(polyp[, unique(file_id)] == "21o22004.1")
+plot(density(CurrList[[29]][, Current], from = 0, to = 1, n = 1000, bw = 0.001))
+
+
+
+```
+
+```{r}
+CurrList_Den <- lapply(CurrList, function(x) {
+  density(x[, Current], from = 0, to = 1, n = 1024, bw = 0.001)$y
+})
+CurrList_Den <- do.call(rbind, CurrList_Den)
+row.names(CurrList_Den) <- polyp[, unique(file_id)]
+```
+
+```{r fig.width=8, fig.height=7}
+pca <- FactoMineR::PCA(CurrList_Den, ncp = 10, graph = F)
+pca_raw_result <- data.frame(file_id = row.names(CurrList_Den), as.data.table(pca$ind$coord))
+pca_raw_result <- merge(unique(polyp[, .(PPT, file_id)]), pca_raw_result)
+
+ggplot(pca_raw_result, aes(x = Dim.1, Dim.2, colour = PPT)) + 
+  geom_point(size = 2) + 
+  ggforce::geom_mark_ellipse(expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  ggforce::geom_mark_ellipse(aes(label = PPT, filter = !PPT %in% c("LVFFA", "LVFFAG", "LVFFAK")), expand = unit(0, "line"), 
+                             label.colour = "grey", con.colour = "grey", con.cap = 0, con.border = "none", con.type = "straight") + 
+  scale_colour_brewer(palette = "Paired") + 
+  labs(title = "PCA", x = paste("PC1 (",round(pca$eig[,2][1],2),"%)",sep = ""), y = paste("PC2 (",round(pca$eig[,2][2],2),"%)",sep = "")) + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        legend.title = element_blank()) -> p1
+p1
+```
+
+```{r fig.width=8, fig.height=7}
+loc <- cmdscale(stats::dist(CurrList_Den, method = "euclidean"))
+colnames(loc) <- c("Dim.1", "Dim.2")
+cmd_raw_result <- merge(unique(polyp[, .(PPT, file_id)]), as.data.table(loc, keep.rownames = "file_id"))
+ggplot(cmd_raw_result, aes(x = Dim.1, Dim.2, colour = PPT)) + 
+  ggforce::geom_mark_ellipse(expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  ggforce::geom_mark_ellipse(aes(label = PPT, filter = !PPT %in% c("LVFFA", "LVFFAG", "LVFFAK")), expand = unit(0, "line"), 
+                             label.colour = "grey", con.colour = "grey", con.cap = 0, con.border = "none", con.type = "straight") + 
+  geom_point(size = 2) + 
+  scale_colour_brewer(palette = "Paired", guide = guide_legend(nrow = 3)) + 
+  # labs(title = "CMD") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        legend.position = "top",
+        legend.title = element_blank()) -> p1
+p1
+```
+
+
+```{r}
+AADensityPlot2 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred %in% x[, .N, Pred][N > 20, Pred]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred, colour = Pred), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 22) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y * 1.2, label = plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE)), colour = AA), size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+p2 <- AADensityPlot2(x = polyp[PPT == "FHL" & Prob > 0.7], target = c("Phe", "His1", "His2", "Leu")) + 
+  labs(y = "FHL") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p2
+```
+
+```{r}
+p3 <- AADensityPlot2(x = polyp[PPT == "FYSL" & Prob > 0.7], target = AMINO_ACID_CODE[unlist(strsplit("FYSL", ""))]) + 
+  labs(y = "FYSL") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p3
+```
+
+```{r}
+p4 <- AADensityPlot2(x = polyp[PPT == "LEF" & Prob > 0.7], target = AMINO_ACID_CODE[unlist(strsplit("LEF", ""))]) + 
+  labs(y = "LEF") + 
+  scale_x_continuous(limits = c(0.12, 0.27)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        # axis.line.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        legend.position = "none")
+p4
+```
+
+```{r}
+p5 <- AADensityPlot2(x = polyp[PPT == "LVFFA" & Prob > 0.7], target = AMINO_ACID_CODE[unlist(strsplit("LVFFA", ""))]) + 
+  labs(y = "LVFFA") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p5
+```
+
+```{r}
+p6 <- AADensityPlot2(x = polyp[PPT == "LVFFAG" & Prob > 0.7], target = AMINO_ACID_CODE[unlist(strsplit("LVFFAG", ""))]) + 
+  labs(y = "LVFFAG") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        axis.line.x = element_blank(),
+        axis.text = element_blank(), 
+        axis.title.x = element_blank(),
+        axis.ticks = element_blank(), 
+        legend.position = "none")
+p6
+```
+
+```{r}
+p7 <- AADensityPlot2(x = polyp[PPT == "LVFFAK" & Prob > 0.7], target = AMINO_ACID_CODE[unlist(strsplit("LVFFAK", ""))]) + 
+  labs(y = "LVFFAK") + 
+  scale_x_continuous(limits = c(0.1, 0.25)) + 
+  theme_classic(base_size = 22) + 
+  theme(plot.tag = element_text(face = "bold", size = 20), 
+        # axis.line.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        # axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        legend.position = "none")
+p7
+```
+
+```{r fig.height=6, fig.width=6, echo=FALSE}
+design <- "
+  14
+  25
+  36
+"
+p2 + p3 + p4 + p5 + p6 + p7 + 
+  plot_layout(design = design)
+ggsave("./analysis/92.PolypeptideSimilarity/P1.pdf", width = 6, height = 6)
+```
+
+```{r fig.height=6, fig.width=6, echo=FALSE}
+p1
+ggsave("./analysis/92.PolypeptideSimilarity/P2.pdf", width = 6, height = 6)
+```
+
+```{r fig.height=6, fig.width=12, echo=FALSE}
+design <- "
+  147
+  257
+  367
+"
+p2 + p3 + p4 + p5 + p6 + p7 + p1 + 
+  plot_layout(design = design)
+```
+
+```{r fig.height=8, fig.width=15, echo=FALSE}
+design <- "
+  1144777
+  2255777
+  3366777
+"
+p2 + p3 + p4 + p5 + p6 + p7 + p1 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig6EF.pdf")
+```
+
+
+
+
+
+
+
+```{r fig.width=12, fig.height=6}
+polyp[, Pred2 := plyr::mapvalues(Pred, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+
+ggplot(polyp[Prob > 0.7 & !PPT %in% c("EAFNL", "LNFAE", "LFGV", "LSGV") & Blockade > 0.1 & Blockade < 0.27][sample(.N, .N)]) + 
+  geom_point(aes(x = Blockade, y = DwellTime, colour = Pred2), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(values = a_cols[polyp[, unique(Pred2)]]) + 
+  guides(alpha = "none") + 
+  facet_wrap(~ PPT, nrow = 2, scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 22) + 
+  theme(panel.grid = element_blank(), 
+        # legend.position = "none",
+        legend.title = element_blank(), 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank())
+ggsave("./analysis/92.PolypeptideSimilarity/P3.pdf", width = 12, height = 6)
+```
+
+```{r}
+which(polyp[, unique(file_id)] == "21o22004.1")
+which(polyp[, unique(file_id)] == "21o19009.1")
+plot(density(CurrList[[29]][, Current], from = 0, to = 1, n = 1000, bw = 0.001))
+plot(density(CurrList[[26]][, Current], from = 0, to = 1, n = 1000, bw = 0.001))
+```
+
+```{r}
+Li <- CurrList[[29]]
+Lj <- CurrList[[26]]
+plot(density(Li[, Current], from = 0, to = 1, n = 1000, bw = 0.001))
+lines(density(Lj[, Current], from = 0, to = 1, n = 1000, bw = 0.001))
+```
+
+
+```{r}
+Ls <- rbind(data.table(PPT = "LEF", with(density(Li[, Current], from = 0, to = 1, n = 1000, bw = 0.001), data.table(x, y))), 
+            data.table(PPT = "FYSL", with(density(Lj[, Current], from = 0, to = 1, n = 1000, bw = 0.001), data.table(x, y))))
+```
+
+```{r}
+SigSumm[, A := plyr::mapvalues(A, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r fig.width=8, fig.height=4}
+ggplot() + 
+  geom_vline(xintercept = SigSumm[A %in% unlist(strsplit("LSYEF", "")), 1 - BlockadeMean], colour = "grey") + 
+  geom_ribbon(data = Ls, aes(x = x, y = y, fill = PPT, ymin = 0, ymax = y, alpha = .1)) + 
+  scale_fill_calc(guide = guide_legend(reverse = T)) + 
+  guides(alpha = "none") + 
+  labs(x = "Standardized current", y = "Denisty") + 
+  # geom_rect(data = SigSumm[A == "L"], aes(xmin = 1 - BlockadeMean - BlockadeSD, xmax = 1 - BlockadeMean + BlockadeSD, ymin = 0, ymax = 18), alpha = 0.3, fill = a_cols["L"]) + 
+  # geom_rect(data = SigSumm[A == "S"], aes(xmin = 1 - BlockadeMean - BlockadeSD, xmax = 1 - BlockadeMean + BlockadeSD, ymin = 0, ymax = 18), alpha = 0.3, fill = a_cols["S"]) + 
+  # geom_rect(data = SigSumm[A == "Y"], aes(xmin = 1 - BlockadeMean - BlockadeSD, xmax = 1 - BlockadeMean + BlockadeSD, ymin = 0, ymax = 18), alpha = 0.3, fill = a_cols["Y"]) + 
+  # geom_rect(data = SigSumm[A == "E"], aes(xmin = 1 - BlockadeMean - BlockadeSD, xmax = 1 - BlockadeMean + BlockadeSD, ymin = 0, ymax = 18), alpha = 0.3, fill = a_cols["E"]) + 
+  # geom_rect(data = SigSumm[A == "F"], aes(xmin = 1 - BlockadeMean - BlockadeSD, xmax = 1 - BlockadeMean + BlockadeSD, ymin = 0, ymax = 18), alpha = 0.3, fill = a_cols["F"]) + 
+  scale_x_continuous(limits = c(0.48, 1), sec.axis = dup_axis(breaks = SigSumm[A %in% unlist(strsplit("LSYEF", "")), 1 - BlockadeMean], labels = SigSumm[A %in% unlist(strsplit("LSYEF", "")), A])) + 
+  theme_classic(base_size = 22) + 
+  theme(legend.title = element_blank(), 
+        legend.position = "right", 
+        axis.title.x.top = element_blank())
+ggsave("./analysis/92.PolypeptideSimilarity/P4.pdf", width = 8, height = 4)
+```
+
+
+```{r fig.width=6, fig.height=5}
+row.names(CurrList_Den) <- plyr::mapvalues(row.names(CurrList_Den), unique(polyp[, .(file_id, PPT)])[[1]], unique(polyp[, .(file_id, PPT)])[[2]])
+edis <- stats::dist(CurrList_Den, method = "euclidean")
+```
+
+```{r fig.width=7, fig.height=6}
+pheatmap::pheatmap(as(edis, "Matrix"), show_rownames = T, show_colnames = F, color = colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "Reds")))(100))
+```
+
+```{r fig.width=8, fig.height=7}
+hp <- pheatmap::pheatmap(as(edis, "Matrix"), show_rownames = T, show_colnames = F, color = colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "Reds")))(100))[[4]]
+as_ggplot(hp)
+ggsave("./analysis/92.PolypeptideSimilarity/P5.pdf", width = 8, height = 7)
+```
+
+
+
+
+
+
+
+

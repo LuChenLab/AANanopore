@@ -1,0 +1,311 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+# LVFA
+
+```{r}
+LVFA <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFA_2", full.names = T), fread))
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFA[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+model0 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelACDEFGHIKLMNPQRSTVWY/RFmodel.Rds")
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFGKLV/RFmodel.Rds")
+```
+
+```{r}
+subtab <- FeatureMatrix[LVFA$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFA_1 <- merge(LVFA, pred1, by = "ID")
+LVFA_1 <- data.table(LVFA_1, D1 = LVFA_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+fwrite(LVFA_1, "./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFA_prediction.txt", sep = "\t", quote = FALSE)
+```
+
+# LVFAK
+
+```{r}
+list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAK_2")
+```
+
+```{r}
+LVFAK <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAK_2", full.names = T), fread))
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFAK[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+subtab <- FeatureMatrix[LVFAK$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAK_1 <- merge(LVFAK, pred1, by = "ID")
+LVFAK_1 <- data.table(LVFAK_1, D1 = LVFAK_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+fwrite(LVFAK_1, "./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAK_prediction.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+LVFAK_1[, .N, Pred1]
+```
+
+
+
+
+```{r}
+list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAK_")
+```
+
+```{r}
+LVFAK <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAK_euclidean", full.names = T), fread))
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFAK[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+subtab <- FeatureMatrix[LVFAK$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAK_1 <- merge(LVFAK, pred1, by = "ID")
+LVFAK_1 <- data.table(LVFAK_1, D1 = LVFAK_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+fwrite(LVFAK_1, "./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAK_prediction_merge.txt", sep = "\t", quote = FALSE)
+```
+
+
+# LVFAG
+
+```{r}
+list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAG_2")
+```
+
+```{r}
+LVFAG <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAG_2", full.names = T), fread))
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFAG[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+subtab <- FeatureMatrix[LVFAG$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAG_1 <- merge(LVFAG, pred1, by = "ID")
+LVFAG_1 <- data.table(LVFAG_1, D1 = LVFAG_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+fwrite(LVFAG_1, "./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAG_prediction.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+LVFAG_1[, .N, Pred1]
+```
+
+
+
+
+```{r}
+list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAG_")
+```
+
+```{r}
+LVFAG <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/60.MergeAll/03.SelectedSignals", "LVFAG_euclidean", full.names = T), fread))
+```
+
+```{r fig.width=24, fig.height=6}
+B_file <- gsub("\\.[0-9]", "", LVFAG[, unique(A)])
+B_file <- list.files("./analysis/81.ABFProcessing/FeatureMatrix", B_file, full.names = T)
+FeatureMatrix <- do.call(rbind, lapply(B_file, fread))
+setkey(FeatureMatrix, ID)
+```
+
+```{r}
+subtab <- FeatureMatrix[LVFAG$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model0, subtab)), 
+                    Prob2 = apply(predict(model0, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model0, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAG_1 <- merge(LVFAG, pred1, by = "ID")
+LVFAG_1 <- data.table(LVFAG_1, D1 = LVFAG_1[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+fwrite(LVFAG_1, "./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAG_prediction_merge.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+LVFAG_1[, .N, Pred1]
+```

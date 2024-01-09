@@ -1,0 +1,149 @@
+---
+title: "Figure 2 e"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+IntervalTime <- as.data.table(openxlsx::read.xlsx("./script/00.FigureTables/Rebuttal/NatureMethods/Fig2/e.xlsx"))
+IntervalTime[, .(AAs = length(unique(amino_acid))), .(concentration)]
+```
+
+```{r}
+IntervalTime_10 <- IntervalTime[concentration == 10, ]
+IntervalTime_100 <- IntervalTime[concentration == 100, ]
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+Sigs1 <- sig0[State == "Sington"]
+Sigs1 <- Sigs1[file_id %in% IntervalTime_100$file_id]
+```
+
+```{r}
+DwellTime <- lapply(Sigs1[, unique(A)], function(aat) {
+  ls <- levels(cut_interval(Sigs1[A == aat, DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[A == aat, DwellTime], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = aat, A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+DwellTime <- do.call(rbind, DwellTime)
+```
+
+```{r}
+IntervalTime <- do.call(rbind, lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/04.IntervalTime", full.names = T), fread))
+IntervalTime <- IntervalTime[File %in% IntervalTime_100$File]
+IntervalTime <- IntervalTime[SigAfter %in% Sigs1$ID | SigBefore %in% Sigs1$ID]
+IntervalTime$A <- substr(IntervalTime[, SigBefore], 1, 3)
+IntervalTime[, Time2 := Time2 * 1000]
+IntervalTimeMean <- IntervalTime[, .(Mean = mean(Time2)), A]
+```
+
+```{r}
+IntervalTime <- lapply(IntervalTime[, unique(A)], function(aat) {
+  ls <- levels(cut_interval(IntervalTime[A == aat, Time2], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(IntervalTime[A == aat, Time2], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = aat, A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+IntervalTime <- do.call(rbind, IntervalTime)
+```
+
+```{r}
+DwellTime[, Koff := 1/half.life]
+IntervalTime[, Kon := 1/(half.life * 1e-4)]
+IntervalTimeMean[, Kon := 1/(Mean * 1e-4)]
+Tau <- merge(DwellTime[, .(A, Koff)], IntervalTime[, .(A, Kon)])
+```
+
+```{r}
+Tau[, DeltaG := -8.314 * 296.16 * log(Kon/Koff)]
+```
+
+```{r}
+Tau2 <- merge(DwellTime[, .(A, Koff)], IntervalTimeMean[, .(A, Kon)])
+Tau2[, DeltaG := -8.314 * 296.16 * log(Kon/Koff)]
+```
+
+```{r}
+plot(Tau2$DeltaG, Tau$DeltaG)
+abline(v = Tau2[A == "Gln", DeltaG])
+cor(Tau2$DeltaG, Tau$DeltaG)
+```
+
+```{r}
+openxlsx::write.xlsx(list(Halflife = Tau, Mean = Tau2), "./analysis/00.FigureTables/Rebuttal/NatureMethods/GibbsFreeEnergy_100uM.xlsx", overwrite = T)
+```
+
+

@@ -1,0 +1,251 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+
+# SignalFiltering <- function(x) {
+#   x <- x[DeltaMean < 1 & Valid == TRUE]
+#   # x <- x[DwellTime >= with(density(x[, DwellTime], n = 10000, adjust = 1), x[which.max(y)])]
+#   x <- x[DwellTime > 0.001]
+#   x <- x[StageSD < 3]
+#   x <- x[LeftLength >= 50 & RightLength >= 50]
+#   x <- x[BaseMean > min(WhiskerRange(x[, BaseMean])) & BaseMean < max(WhiskerRange(x[, BaseMean]))]
+#   rk <- rank(x[, DwellTime]) + rank(x[, -1 * StageSD])
+#   x[rk > quantile(rk, 0.1)]
+# }
+
+# SignalFiltering <- function(x) {
+#   x <- x[Valid == TRUE & DeltaMean < 0.5 & BaseMean > 100 & SignalCurrent > 50 & SignalCurrentPercent == 100]
+#   x[!(DwellTime < mean(DwellTime) & StageSD > mean(StageSD))]
+# }
+
+SignalFiltering <- function(x) {
+  x <- x[Valid == TRUE & DeltaMean < 0.5 & BaseMean > 100 & SignalCurrent > 50]
+  x[!(DwellTime < 0.003 & StageSD > 2)]
+}
+
+SignalCurrent <- function(x, abf, cores = 10) {
+  Sigs_Multiple_Current <- mclapply(seq_len(nrow(x)), FUN = function(i) {
+    data.table(ID = x[i, ID], Current = abf[Time > x[i, StartTime] & Time < x[i, EndTime], pA] / x[i, BaseMean])
+  }, mc.cores = cores)
+  do.call(rbind, Sigs_Multiple_Current)
+}
+
+densityPeak <- function(x, bw = 1, n = 1024, plot = T, ...) {
+  Peaks <- function(x, y) {
+    stopifnot(length(x) == length(y))
+    uR <- IRanges(diff(y) >= 0)
+    dR <- IRanges(diff(y) <= 0)
+    res <- do.call(c, lapply(seq_along(uR), function(i) {
+      reduce(c(uR[i], dR[i]))
+    }))
+    pk <- res[queryHits(findOverlaps(res, IRanges(which.max(y), which.max(y))))]
+    c(x[start(pk)], x[end(pk)])
+  }
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  if(plot) {
+    plot(den)
+    abline(v = ps, lty = 2, col = 2)
+    return(ps)
+  } else {
+    return(ps)
+  }
+}
+```
+
+```{r}
+setwd("/mnt/raid61/Personal_data/tangchao/AANanopore")
+library(data.table)
+library(ggplot2)
+library(Biostrings)
+```
+
+```{r}
+meta <- rbind(data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525.xlsx")), data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525additional.xlsx")))
+meta[amino_acid == "cys", amino_acid := "Cys"]
+
+meta <- meta[file_name != 21703001]
+```
+
+```{r}
+Sigs <- list.files("./analysis/12.SignalFiltering/Dec28/Filter1", full.names = T)
+Sigs <- lapply(Sigs, fread)
+Sigs <- do.call(rbind, Sigs)
+Sigs <- merge(Sigs, meta[, .(file_name, amino_acid, concentration)])
+```
+
+```{r fig.width=3, fig.height=4}
+State1 <- Sigs[BlockadeValid == T & TimeAndSDValid == T, .(State1 = mean(SignalCurrentPercent == 100)), .(file_name, concentration, amino_acid)]
+State1$amino_acid <-factor(State1$amino_acid, levels = State1[, median(State1), amino_acid][order(V1), amino_acid])
+
+ggplot(State1, aes(x = as.character(concentration), y = State1 * 100)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(height = 0) + 
+  labs(y = "Percentage of state1 signals (%)", x = "Concentration") + 
+  theme_bw(base_size = 15) + 
+  stat_compare_means(comparisons = list(c("1", "10"), c("10", "100")))
+```
+
+```{r}
+ggplot(State1, aes(x = amino_acid, y = State1 * 100)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(height = 0) + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Percentage of state1 signals (%)")
+```
+
+```{r}
+State1 <- Sigs[BlockadeValid == T & TimeAndSDValid == T, .(State1 = mean(Segments == 1)), .(file_name, concentration, amino_acid)]
+State1$amino_acid <-factor(State1$amino_acid, levels = State1[, median(State1), amino_acid][order(V1), amino_acid])
+
+ggplot(State1, aes(x = as.character(concentration), y = State1 * 100)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(height = 0) + 
+  labs(y = "Percentage of state1 signals (%)", x = "Concentration") + 
+  theme_bw(base_size = 15) 
+
+ggplot(State1, aes(x = amino_acid, y = State1 * 100)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(height = 0) + 
+  labs(y = "Percentage of state1 signals (%)") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank())
+```
+
+```{r}
+DwellTime1 <- Sigs[BaseMeanValid == T & BlockadeValid == T & TimeAndSDValid == T & SignalCurrentPercent == 100]
+DwellTime1$amino_acid <-factor(DwellTime1$amino_acid, levels = DwellTime1[, mean(DwellTime), amino_acid][order(V1), amino_acid])
+ggplot(DwellTime1, aes(x = amino_acid, y = DwellTime * 1000)) + 
+  geom_violin() + 
+  scale_y_log10() + 
+  stat_summary(fun.data = "mean_sd") + 
+  labs(y = "Dwell time1 (ms)") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank())
+```
+
+```{r}
+DwellTime1 <- Sigs[BaseMeanValid == T & BlockadeValid == T & TimeAndSDValid == T & SignalCurrentPercent == 100]
+DwellTime1$amino_acid <-factor(DwellTime1$amino_acid, levels = DwellTime1[, median(Blockade), amino_acid][order(V1), amino_acid])
+ggplot(DwellTime1, aes(x = amino_acid, y = Blockade)) + 
+  scale_y_log10() + 
+  stat_summary(fun.data = "median_mad") + 
+  labs(y = "Blockade") + 
+  theme_bw(base_size = 15) + 
+  theme(axis.title.x = element_blank())
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(DwellTime1[Blockade < 0.25], aes(x = Blockade, y = DwellTime * 1000, colour = amino_acid)) + 
+  geom_point(size = 0.1)
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(DwellTime1[Blockade < 0.25], aes(x = Blockade, colour = amino_acid)) + 
+  geom_density(adjust = .1)
+```
+
+
+```{r}
+DwellTime1[, levels(amino_acid)]
+```
+
+```{r}
+plot_mix_comps <- function(x, mu, sigma, lam) {
+  lam * dnorm(x, mu, sigma)
+}
+```
+
+```{r}
+out <- mixtools::normalmixEM(x = DwellTime1[Blockade < 0.3 & amino_acid == "Glu", Blockade], fast = TRUE, k = 2, arbmean = TRUE, arbvar = TRUE)
+out <- with(out, data.table(amino_acid = "Glu", mu = mu[which.max(lambda)], lambda = max(lambda), sigma = sigma[which.max(lambda)]))
+ggplot(DwellTime1[Blockade < 0.3 & amino_acid == "Glu"], aes(x = Blockade)) + 
+  geom_histogram(data = DwellTime1[Blockade < 0.3 & amino_acid == "Glu"], aes(x = Blockade, y = after_stat(density)), fill = "grey", binwidth = 0.001) + 
+  stat_function(geom = "line", fun = plot_mix_comps,
+                args = list(out[, mu], out[, sigma], lam = out[, lambda]),
+                colour = "red", lwd = 1, n = 2000) + 
+  theme_bw(base_size = 15)
+```
+
+
+```{r}
+ggplot(DwellTime1[Blockade < 0.3 & amino_acid == "Glu"], aes(x = Blockade)) + 
+  geom_histogram(data = DwellTime1[Blockade < 0.3 & amino_acid == "Glu"], aes(x = Blockade), fill = "grey", binwidth = 0.0006) + 
+  stat_function(geom = "line", fun = plot_mix_comps,
+                args = list(out[, mu], out[, sigma], lam = out[, lambda]),
+                colour = "red", lwd = 1, n = 2000) + 
+  theme_bw(base_size = 15)
+```
+
+```{r fig.width=16, fig.height=12}
+lapply(DwellTime1[, levels(amino_acid)], function(a) {
+  out <- mixtools::normalmixEM(x = DwellTime1[Blockade < 0.3 & amino_acid == a, Blockade], fast = TRUE, k = 2, arbmean = TRUE, arbvar = TRUE)
+  out <- with(out, data.table(amino_acid = a, mu = mu[which.max(lambda)], lambda = max(lambda), sigma = sigma[which.max(lambda)]))
+  ggplot(DwellTime1[Blockade < 0.3 & amino_acid == a], aes(x = Blockade)) + 
+    geom_histogram(data = DwellTime1[Blockade < 0.3 & amino_acid == a], aes(x = Blockade, y = after_stat(density)), fill = "grey", binwidth = 0.001) + 
+    stat_function(geom = "line", fun = plot_mix_comps,
+                  args = list(out[, mu], out[, sigma], lam = out[, lambda]),
+                  colour = "red", lwd = 1, n = 2000) + 
+    theme_bw(base_size = 15) + 
+    labs(title = a)
+}) -> ps
+
+cowplot::plot_grid(plotlist = ps)
+```
+
+
+```{r}
+Sigs_list <- split(Sigs, Sigs$file_name)
+InterTime <- lapply(Sigs_list, function(x) {
+  data.table(amino_acid = x[, unique(amino_acid)], concentration = as.character(x[, unique(concentration)]), InterTime = x[-1, StartTime] - x[-.N, EndTime])
+})
+InterTime <- do.call(rbind, InterTime)
+```
+
+```{r}
+ggplot(InterTime, aes(x = amino_acid, y = InterTime * 1000, colour = concentration)) + 
+  geom_violin() + 
+  scale_y_log10() + 
+  stat_summary(fun.data = "mean_sd", position = position_dodge(width = 0.9)) + 
+  labs(y = "Interevent times (ms)") + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "top", axis.title.x = element_blank())
+```
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,214 @@
+---
+title: "Figure 5 c,d"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+a_cols <- aa_cols
+names(a_cols) <- plyr::mapvalues(names(a_cols), AMINO_ACID_CODE, names(AMINO_ACID_CODE))
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+AABlockade <- AABlockade[State == "State1"]
+AABlockade[, A := plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+sig2 <- fread("./analysis/93.Revision/03.RealTimeHydrolysis/01.SignalPrediction/Predicted_signals.txt")
+```
+
+# EAFNL
+
+```{r}
+EAFNL <- sig2[Pred2 != "Noise" & Delta1 > 0.95 & seq == "EAFNL" & experiment != "Rep2"]
+EAFNL[, file_id := as.character(A)]
+# EAFNL <- data.table(EAFNL, D1 = EAFNL[, get_density(x = Blockade, y = log10(DwellTime))])
+EAFNL[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+EAFNL[, Pred1 := factor(Pred1, levels = c("E", "A", "F", "N", "L"))]
+
+EAFNL[, experiment := paste0("Rep", as.numeric(as.factor(experiment)))]
+```
+
+```{r}
+ggplot(EAFNL, aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], color = "red") + 
+  # scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred1)]]), values = aa_cols[sig2[, unique(Pred1)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+
+```{r}
+IntervalTime <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig2C.xlsx"))
+setnames(IntervalTime, "AminoAcid", "AA")
+id2rep <- as.data.table(openxlsx::read.xlsx("./data/MetaInfomation/StandardAA_Meta_Rep.xlsx"))
+id2rep[, file_id := gsub("00000001$", "", file_id)]
+id2rep[, file_id := gsub("199999999$", "2", file_id)]
+IntervalTime <- merge(IntervalTime, id2rep[, .(file_id, rep)], by = "file_id")
+IntervalTime <- IntervalTime[, .(Frequency = mean(Frequency)), .(Class, AA, rep)]
+IntervalTime[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+od <- IntervalTime[, median(Frequency), .(Class, AA)][order(Class, V1), AA]
+IntervalTime[, AA := factor(AA, levels = od)]
+IntervalTime <- IntervalTime[, .(Mean = mean(Frequency), Median = median(Frequency)), AA]
+IntervalTime[, A := plyr::mapvalues(AA, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r}
+Freq_N <- EAFNL[, .N, .(seq, Pred1, experiment, file_id)]
+Freq_N <- merge(Freq_N, IntervalTime, by.x = "Pred1", by.y = "A")
+Freq_N[, N2 := N / Median]
+Freq_N <- merge(Freq_N, Freq_N[, .SD[, .(Pred1, P = N2 / sum(N2) * 100)], by = .(seq, experiment, file_id)], by = c("seq", "experiment", "file_id", "Pred1"))
+```
+
+```{r}
+Freq_N1 <- Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)]
+```
+
+```{r}
+ggplot(Freq_N1, aes(Pred1, y = P)) + 
+  geom_boxplot(outlier.colour = NA) +
+  geom_point(aes(colour = experiment), size = 2, height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj(guide = "none") + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", subtitle = "Adjusted by Median") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(face = "bold"))
+```
+
+
+# LNFAE
+
+```{r}
+sig2 <- sig2[!A %in% c("2024_01_04_0002.1", "21827012.1", "2024_01_04_0003.1") & DwellTime > 0.3]
+LNFAE <- sig2[Delta1 > 0.95 & Pred2 != "Noise" & seq == "LNFAE" & experiment %in% c("Rep1", "Rep8", "Rep9")]
+LNFAE[, file_id := as.character(A)]
+LNFAE[, Pred1 := plyr::mapvalues(Pred1, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+LNFAE[, Pred1 := factor(Pred1, levels = c("E", "A", "F", "N", "L"))]
+LNFAE[, experiment := paste0("Rep", as.numeric(as.factor(experiment)))]
+```
+
+
+```{r}
+ggplot(LNFAE, aes(x = Blockade, y = DwellTime, colour = Pred1)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], 
+                     labels = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], A], limits = c(0.1, 0.3)) + 
+  # geom_vline(xintercept = AABlockade[AA %in% AMINO_ACID_CODE[unlist(strsplit("EAFNL", ""))], Blockade], color = "red") + 
+  # scale_colour_manual(breaks = names(aa_cols[sig2[, unique(Pred1)]]), values = aa_cols[sig2[, unique(Pred1)]], guide = guide_legend(override.aes = list(size = 1))) + 
+  theme_bw(base_size = 22) + 
+  labs(x = "Blockade", y = "Dwell time (ms)", tag = "b") + 
+  theme(legend.position = "none", 
+        plot.tag = element_text(face = "bold", size = 30), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        panel.grid = element_blank())
+```
+
+
+```{r}
+Freq_N <- LNFAE[, .N, .(seq, Pred1, experiment, file_id)]
+Freq_N <- merge(Freq_N, IntervalTime, by.x = "Pred1", by.y = "A")
+Freq_N[, N2 := N / Median]
+Freq_N <- merge(Freq_N, Freq_N[, .SD[, .(Pred1, P = N2 / sum(N2) * 100)], by = .(seq, experiment, file_id)], by = c("seq", "experiment", "file_id", "Pred1"))
+```
+
+```{r}
+Freq_N2 <- Freq_N[, .(P = mean(P)), .(seq, experiment, Pred1)]
+```
+
+```{r}
+ggplot(Freq_N2, aes(Pred1, y = P)) + 
+  geom_boxplot(outlier.colour = NA) +
+  geom_point(aes(colour = experiment), size = 2, height = 0) + 
+  geom_line(aes(x = as.numeric(Pred1), y = P, colour = experiment)) + 
+  scale_colour_wsj(guide = "none") + 
+  facet_wrap(~ seq) + 
+  labs(y = "Percentage of normalized\n bumber of events", x = "Identified amino acid", subtitle = "Adjusted by Median") + 
+  theme_base(base_size = 22) + 
+  theme(plot.background = element_blank(), 
+        # axis.title.x = element_blank(), 
+        legend.title = element_blank(), 
+        plot.tag = element_text(face = "bold"))
+```
+
+
+```{r}
+data <- rbind(EAFNL[, .(Peptide = seq, Experiment = experiment, Blockade, DwellTime, Density = D1, AminoAcid = Pred1)], 
+              LNFAE[, .(Peptide = seq, Experiment = experiment, Blockade, DwellTime, Density = D1, AminoAcid = Pred1)])
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig5C.xlsx", overwrite = TRUE)
+```
+
+```{r}
+data2 <- rbind(Freq_N1, Freq_N2)[, .(Peptide = seq, Experiment = experiment, AminoAcid = Pred1, Percentage = P)]
+```
+
+```{r}
+openxlsx::write.xlsx(data2, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig5D.xlsx")
+```

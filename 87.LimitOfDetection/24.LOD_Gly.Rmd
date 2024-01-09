@@ -1,0 +1,145 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+```
+
+# Gly 
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/MetaInfomation/AtandardAA_LOD.xlsx", sheet = 1))
+meta <- meta[amino_acid == "Gly"]
+meta[, sig_file := paste0("./analysis/87.LimitOfDetection/01.SelectedL0/", file_id, ".MainL0.txt")]
+```
+
+```{r}
+Gly_All <- fread(file.path("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals.txt"), sep = "\t")
+Gly_All[, A := as.character(A)]
+Gly_All <- merge(meta[, .(file_id, concentration)], Gly_All, by.x = "file_id", by.y = "A")
+```
+
+```{r}
+ggplot(Gly_All, aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.3)) + 
+  facet_wrap(~ factor(concentration), nrow = 1)
+```
+
+```{r eval=FALSE}
+sig <- split(Gly_All, Gly_All$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/87.LimitOfDetection/01.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  
+  ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+saveRDS(SigInterTime, file = "./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals_InterTime.Rds")
+```
+
+```{r}
+SigInterTime <- readRDS("./analysis/87.LimitOfDetection/03.SelectedSignals/Gly_euclidean_distance_knn_selected.signals_InterTime.Rds")
+```
+
+```{r}
+Gly_All_Sig_Freq <- merge(SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], 
+                          Gly_All[, .(SigTime = sum(DwellTime), N = .N), .(file_id)], by.x = "File", by.y = "file_id")
+Gly_All_Sig_Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Gly_All_Sig_Freq[, ValidTime := ValidTime / 1000 / 60]
+Gly_All_Sig_Freq[, Freq := N / ValidTime]
+Gly_All_Sig_Freq <- merge(meta[, .(file_id, concentration)], Gly_All_Sig_Freq, by.y = "File", by.x = "file_id")
+```
+
+```{r}
+Gly_All_Sig_Freq <- Gly_All_Sig_Freq[concentration < 100]
+```
+
+```{r}
+library(ggpubr)
+ggplot() + 
+  stat_summary(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq), fun.data = "mean_sd") + 
+  geom_smooth(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], aes(x = concentration, y = Freq), size = 5) + 
+  stat_regline_equation(data = Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration], 
+                        aes(x = concentration, y = Freq, label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~~")), 
+                        label.y = 30, size = 5) + 
+  # annotate(geom = "text", 0.75, 60, label = paste0("Slope = ", Gly_All_Sig_Freq[, .(Freq = mean(Freq)), concentration][, round(coef(lm(Freq ~ concentration))[2], 2)]), size = 5) +
+  theme_base()
+```
+
+
+```{r}
+N = "`N = 20`"
+ggplot(data = Gly_All_Sig_Freq, aes(x = concentration, y = Freq)) + 
+  geom_point() + 
+  # stat_summary(fun.data = "mean_se") + 
+  geom_smooth(method = "lm", se = F) + 
+  # scale_x_continuous(limits = c(0, 4)) + 
+  # scale_y_continuous(limits = c(0, 70)) + 
+  geom_hline(yintercept = 5, lty = 2, colour = "grey") + 
+  labs(x = "Concentration (μM)", y = expression(Signal~frequency~"("*"min"^-1*")"), title = "Gly") +
+  stat_cor(aes(label = paste0(paste(..r.label.., ..p.label.., N, sep = "~`,`~"))), size = 5) +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~`,`~")), label.y = 60, size = 5) + 
+  theme_base()
+```
+
+

@@ -1,0 +1,200 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+
+# SignalFiltering <- function(x) {
+#   x <- x[DeltaMean < 1 & Valid == TRUE]
+#   # x <- x[DwellTime >= with(density(x[, DwellTime], n = 10000, adjust = 1), x[which.max(y)])]
+#   x <- x[DwellTime > 0.001]
+#   x <- x[StageSD < 3]
+#   x <- x[LeftLength >= 50 & RightLength >= 50]
+#   x <- x[BaseMean > min(WhiskerRange(x[, BaseMean])) & BaseMean < max(WhiskerRange(x[, BaseMean]))]
+#   rk <- rank(x[, DwellTime]) + rank(x[, -1 * StageSD])
+#   x[rk > quantile(rk, 0.1)]
+# }
+
+# SignalFiltering <- function(x) {
+#   x <- x[Valid == TRUE & DeltaMean < 0.5 & BaseMean > 100 & SignalCurrent > 50 & SignalCurrentPercent == 100]
+#   x[!(DwellTime < mean(DwellTime) & StageSD > mean(StageSD))]
+# }
+
+SignalFiltering <- function(x) {
+  x <- x[Valid == TRUE & DeltaMean < 0.5 & BaseMean > 100 & SignalCurrent > 50]
+  x[!(DwellTime < 0.003 & StageSD > 2)]
+}
+
+SignalCurrent <- function(x, abf, cores = 10) {
+  Sigs_Multiple_Current <- mclapply(seq_len(nrow(x)), FUN = function(i) {
+    data.table(ID = x[i, ID], Current = abf[Time > x[i, StartTime] & Time < x[i, EndTime], pA] / x[i, BaseMean])
+  }, mc.cores = cores)
+  do.call(rbind, Sigs_Multiple_Current)
+}
+
+densityPeak <- function(x, bw = 1, n = 1024, plot = T, ...) {
+  Peaks <- function(x, y) {
+    stopifnot(length(x) == length(y))
+    uR <- IRanges(diff(y) >= 0)
+    dR <- IRanges(diff(y) <= 0)
+    res <- do.call(c, lapply(seq_along(uR), function(i) {
+      reduce(c(uR[i], dR[i]))
+    }))
+    pk <- res[queryHits(findOverlaps(res, IRanges(which.max(y), which.max(y))))]
+    c(x[start(pk)], x[end(pk)])
+  }
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  if(plot) {
+    plot(den)
+    abline(v = ps, lty = 2, col = 2)
+    return(ps)
+  } else {
+    return(ps)
+  }
+}
+```
+
+```{r}
+setwd("/mnt/raid61/Personal_data/tangchao/AANanopore")
+library(data.table)
+library(ggplot2)
+library(Biostrings)
+```
+
+```{r}
+AABlockade <- data.table(AA = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"), 
+                         Blockade = c(0.14718, 0.17148, 0.16516, 0.21409, 0.18622, 0.24528, 0.1882, 0.12072, 0.24652, 0.20722, 0.1995, 0.16875, 0.19772, 0.22018, 0.2183, 0.13131, 0.16101, 0.22744, 0.21276, 0.19044))
+```
+
+```{r}
+meta <- data.table(openxlsx::read.xlsx("./data/20221229/实验记录.xlsx", sheet = 2))
+colnames(meta) <- c("file_name", "amino_acid", "start_time", "end_time")
+meta$file_path <- mapply(meta$file_name, FUN = function(x) list.files("./data/20221229", x, full.names = T, recursive = T))
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+```
+
+```{r}
+files <- list.files("./analysis/11.SignalIdentification/Dec29/MixAA", "RawSignal", full.names = T)
+Sig <- lapply(files, function(x) {
+  y <- data.table(Group = gsub(".txt", "", gsub("RawSignal_", "", basename(x))), fread(x))
+  y[Valid == TRUE & DeltaMean < 0.5 & BaseMean > 100 & SignalCurrent > 50]
+})
+
+Sig <- do.call(rbind, Sig)
+Sig[, Blockade := 1 - SignalCurrent / BaseMean]
+```
+
+```{r fig.width=7, fig.height=3.5}
+ggplot(Sig[grepl("EKFS", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)") -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=10, fig.height=7}
+ggplot(Sig[grepl("EKFS", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  facet_wrap(~ Group) + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)")
+```
+
+
+```{r fig.width=10, fig.height=7}
+ggplot(Sig[grepl("EKFS", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = BaseMean, colour = Group)) + 
+  geom_point(size = 1) + 
+  # scale_y_log10() + 
+  facet_wrap(~ Group) + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Base line current (pA)") 
+```
+
+
+
+```{r fig.width=7, fig.height=3.5}
+ggplot(Sig[grepl("LEF", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "L", "F"), Blockade]) + 
+  labs(y = "Dwell time (ms)") -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=10, fig.height=3.5}
+ggplot(Sig[grepl("LEF", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  facet_wrap(~ Group) + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "L", "F"), Blockade]) + 
+  labs(y = "Dwell time (ms)")
+```
+
+
+```{r fig.width=10, fig.height=3.5}
+ggplot(Sig[grepl("LEF", Group) & SignalCurrentPercent == 100], aes(x = Blockade, y = BaseMean, colour = Group)) + 
+  geom_point(size = 1) + 
+  # scale_y_log10() + 
+  facet_wrap(~ Group) + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "L", "F"), Blockade]) + 
+  labs(y = "Base line current (pA)") 
+```
+
+
+
+
+
+
+
+
+
+
+
+

@@ -40,6 +40,14 @@ names(AA_Cols) <- Biostrings::AA_STANDARD
 ```
 
 ```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
 AADensityPlot <- function(x, top = 4) {
   ggplot(x, aes(Blockade, after_stat(count / max(count)), fill = AA, colour = AA)) +
     geom_density(adjust = 3, alpha = 0.5) + 
@@ -80,6 +88,13 @@ Polypeptide1_iden <- lapply(files, function(x) {
 })
 
 Polypeptide1_iden <- data.table(meta[rep(gsub("AA_Signals_", "", gsub(".RData", "", basename(files))), mapply(nrow, Polypeptide1_iden))], do.call(rbind, Polypeptide1_iden))
+```
+
+```{r}
+dats <- rbind(Polypeptide1_iden[amino_acid == "APRLRFYSL" & Cutoff == "C4" & MinPP > 0.6], 
+      Polypeptide1_iden[amino_acid == "DRVYIHPFHL" & Cutoff == "C3" & MinPP > 0.5], 
+      Polypeptide1_iden[amino_acid == "RPVKVYPNGAEDESAEAFPLEF" & Cutoff == "C3" & MinPP > 0.5])[, .(file_name, peptides = amino_acid, DwellTime, Blockade, AA)]
+openxlsx::write.xlsx(dats, file = "./analysis/00.FigureTables/Oct23/Figure4/Fig4cd.xlsx")
 ```
 
 

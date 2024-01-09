@@ -1,0 +1,97 @@
+---
+title: "Figure 2 e"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+Sigs1 <- sig0[State == "Sington"]
+```
+
+```{r}
+DwellTime <- lapply(Sigs1[, unique(A)], function(aat) {
+  ls <- levels(cut_interval(Sigs1[A == aat, DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[A == aat, DwellTime], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = aat, A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+DwellTime <- do.call(rbind, DwellTime)
+DwellTime[, AA := substr(A, 1, 3)]
+DwellTime[, A := gsub("CbC", "CMC", A)]
+DwellTime[, AA := gsub("CbC", "CMC", AA)]
+DwellTime[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+DwellTime[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+DwellTime[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+DwellTime <- DwellTime[A != "CMC"]
+DwellTime[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+od <- DwellTime[order(Class, half.life), A]
+DwellTime[, A := factor(A, levels = od)]
+```
+
+```{r}
+Sigs1[, A := factor(A, levels = od)]
+Sigs1[, AA := gsub("CbC", "CMC", AA)]
+Sigs1[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+Sigs1[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+Sigs1[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+Sigs1[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+Sigs1 <- Sigs1[A != "CMC"]
+setnames(DwellTime, "A", "AminoAcid")
+DwellTime[, AA := NULL]
+```
+
+```{r eval=FALSE}
+# openxlsx::write.xlsx(list(Sigs1[, .(AminoAcid = A, Class, File = file_id, ID, Blockade, DwellTime)], DwellTime), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig2E.xlsx")
+openxlsx::write.xlsx(list(Sigs1[, .(AminoAcid = A, Class, DwellTime)], DwellTime[, .(Class, AminoAcid, half.life, half.life_Std.Error)]), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig2E.xlsx", overwrite = T)
+```

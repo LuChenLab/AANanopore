@@ -1,0 +1,57 @@
+---
+title: "Figure 3 b"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+library(caret)
+library(multiROC)
+library(pROC)
+```
+
+```{r}
+roc_mat <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig3B.xlsx", 1))
+AUCs <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig3B.xlsx", 2))
+```
+
+```{r fig.width=6, fig.height=7}
+ggplot(roc_mat, aes(x = 1 - Specificity, y = Sensitivity, colour = Dataset)) + 
+  geom_path(size = 1) + 
+  geom_text(data = AUCs, mapping = aes(x = 0.75, y = 3:1/10, label = paste("AUC:", round(AUC, 3))), size = 6) +
+  scale_color_brewer(palette = "Set1", guide = guide_legend(nrow = 1)) +
+  lims(x = c(0, 1), y = c(0, 1)) + 
+  labs(tag = "b") + 
+  theme_bw(base_size = 22) + 
+  theme(legend.title = element_blank(), 
+        legend.position = "top", 
+        panel.grid = element_blank(), 
+        plot.tag = element_text(size = 30, face = "bold"))
+ggsave("./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Figure/Fig3B.pdf", width = 6, height = 7)
+```
+
+

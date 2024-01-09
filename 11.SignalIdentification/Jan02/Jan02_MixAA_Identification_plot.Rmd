@@ -1,0 +1,174 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+```
+
+```{r}
+AABlockade <- data.table(AA = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"), 
+                         Blockade = c(0.14718, 0.17148, 0.16516, 0.21409, 0.18622, 0.24528, 0.1882, 0.12072, 0.24652, 0.20722, 0.1995, 0.16875, 0.19772, 0.22018, 0.2183, 0.13131, 0.16101, 0.22744, 0.21276, 0.19044))
+AABlockade$amino_acid <- plyr::mapvalues(AABlockade$AA, names(Biostrings::AMINO_ACID_CODE), Biostrings::AMINO_ACID_CODE)
+```
+
+```{r}
+meta <- data.table(openxlsx::read.xlsx("./data/ChenShanchuan20230102/实验记录 - 20230102.xlsx", sheet = 2))
+colnames(meta) <- c("file_name", "amino_acid", "start_time", "end_time")
+meta$file_path <- mapply(meta$file_name, FUN = function(x) list.files("./data/ChenShanchuan20230102", x, full.names = T, recursive = T))
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+```
+
+```{r}
+files <- list.files("./analysis/11.SignalIdentification/Jan02/MixAA", "RawSignal", full.names = T)
+Sig <- lapply(files, function(x) {
+  y <- data.table(Group = gsub(".txt", "", gsub("RawSignal_", "", basename(x))), fread(x))
+  y[Valid == TRUE & DeltaMean < 0.5]
+})
+
+Sig <- do.call(rbind, Sig)
+Sig[, Blockade := 1 - SignalCurrent / BaseMean]
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][1]
+ggplot(Sig[Group == a & SignalCurrentPercent > 90], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][2]
+ggplot(Sig[Group == a], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][3]
+ggplot(Sig[Group == a], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][4]
+ggplot(Sig[Group == a], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none") + 
+  geom_vline(xintercept = AABlockade[AA %in% c("E", "K", "F", "S"), Blockade]) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][5]
+ggplot(Sig[Group == a & DwellTime < .1], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank()) + 
+  geom_vline(xintercept = AABlockade[AA %in% c("L", "D", "W", "E", "Q", "S", "T", "R"), Blockade], lty = 2, colour = "grey") + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=7, fig.height=3.5}
+a <- Sig[, unique(Group)][6]
+ggplot(Sig[Group == a & DwellTime < .1], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank()) + 
+  geom_vline(xintercept = AABlockade[AA %in% c("L", "D", "W", "E", "Q", "S", "T", "R"), Blockade], lty = 2) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r fig.width=12, fig.height=3.5}
+a <- Sig[, unique(Group)][6]
+ggplot(Sig[Group == a & DwellTime < .1 & BaseMean > 88 & BaseMean < 89 & Blockade < 0.5], aes(x = Blockade, y = DwellTime * 1000, colour = Group)) + 
+  geom_point(size = 1) + 
+  scale_y_log10() + 
+  lims(x = c(.1, .55)) +
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank()) + 
+  geom_vline(xintercept = aaBlockade[aa %in% c("L", "D", "W", "E", "Q", "S", "T", "R"), x], lty = 2) + 
+  scale_x_continuous(breaks = aaBlockade[aa %in% c("L", "D", "W", "E", "Q", "S", "T", "R"), x], 
+                     labels = aaBlockade[aa %in% c("L", "D", "W", "E", "Q", "S", "T", "R"), aa]) + 
+  labs(y = "Dwell time (ms)", title = a) -> p1
+ggMarginal(p1, adjust = 0.1, margins = "x")
+```
+
+```{r}
+a <- Sig[, unique(Group)][6]
+Sig[Group == a & DwellTime < .1]
+
+ggplot(Sig[Group == a & DwellTime < .1], aes(x = BaseMean)) + 
+  geom_density() + 
+  theme_bw(base_size = 15) + 
+  theme(legend.position = "none", panel.grid = element_blank()) + 
+  labs(y = "Dwell time (ms)", title = a) + 
+  geom_vline(xintercept = 88:89)
+
+```
+
+```{r fig.width=12, fig.height=3.5}
+ggplot(Sig, aes(x = BaseMean, colour = Group)) + 
+  geom_line(stat = "density", adjust = 3) + 
+  theme_bw(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+
+
+

@@ -1,0 +1,371 @@
+---
+title: "Signal selecting"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(dplyr)
+library(lsa)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231031PTM2/20231031_PTM2.xlsx", sheet = 1))[, 1:7]
+colnames(meta) <- c("file_name", "start_time", "end_time",  "amino_acid", "file_id", "sample", "base_line")
+meta <- meta[grepl("ptm", sample)]
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name, start_time)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+meta[, sig_file := paste0("./analysis/90.UnnaturalPTM/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_file)]
+meta <- meta[file.exists(sig_file)]
+```
+
+
+```{r}
+Sigs <- fread("./analysis/90.UnnaturalPTM/03.SelectedSignals/SerPTM_euclidean_distance_knn_selected.signals.txt")
+Sigs[, AA := ifelse(A %in% c("20231031_0007.1", "20231031_0012.1"), "P-S", "P-S + S")]
+
+sig1 <- fread(paste0("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals/Ser.signal.txt"))
+sig1[, AA := "S"]
+setnames(sig1, "file_id", "A")
+Sigs <- rbind(Sigs, sig1[State == "Sington"], fill = TRUE)
+```
+
+```{r}
+Sigs <- split(Sigs, Sigs$AA)
+Sigs <- lapply(Sigs, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+Sigs <- do.call(rbind, Sigs)
+Sigs[, AA := factor(AA, levels = c("S", "P-S", "P-S + S"))]
+```
+
+```{r}
+ggplot(Sigs[SignalCurrentPercent > 80][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10() + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  scale_colour_stata() + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        legend.position = "none") -> p1
+p1
+```
+
+```{r fig.width=4, fig.height=5}
+ggplot(Sigs[SignalCurrentPercent > 80][AA != "P-S + S"][sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D)) + 
+  geom_point() + 
+  scale_y_log10(breaks = c(0.3, 3, 30)) + 
+  facet_wrap(~ AA, ncol = 1, strip.position = "right", scales = "free_y") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_stata() + 
+  scale_x_continuous(limits = c(0.1, 0.35)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_text(hjust = 0), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        plot.margin = unit(c(1, 1, 0, 1), "line"), 
+        legend.position = "none") -> p2
+p2
+```
+
+
+
+
+```{r}
+ggplot(Sigs[AA == "P-S" & SignalCurrentPercent > 80 & Blockade < 0.4 & Blockade > 0.2], aes(x = Blockade, y = DwellTime)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+```{r}
+FIT <- fitdistr(Sigs[AA == "P-S" & SignalCurrentPercent > 80 & Blockade < 0.4 & Blockade > 0.2, Blockade], "normal")$estimate
+FIT <- data.table(A = "P-S", mean = FIT[1], sd = FIT[2])
+```
+
+```{r}
+ggplot() +
+  geom_histogram(data = Sigs[AA == "P-S" & SignalCurrentPercent > 80 & Blockade < 0.4 & Blockade > 0.2], aes(Blockade, after_stat(density)), binwidth = 0.001, fill = "grey") + 
+  stat_function(fun = dnorm, n = 1024, args = list(mean = FIT[A == "P-S", mean], sd = FIT[A == "P-S", sd]), colour = "red", size = 1.2) +
+  labs(title = "P-S", subtitle = FIT[A == "P-S", paste("Mean =", round(mean, 3), "; SD =", round(sd, 4))]) +
+  ggthemes::theme_base(base_size = 22) + 
+  theme(plot.background = element_blank())
+```
+
+```{r}
+Sigs1 <- Sigs[AA == "P-S" & SignalCurrentPercent > 80 & Blockade < 0.4 & Blockade > 0.2]
+
+DwellTime <- lapply(Sigs1[, unique(AA)], function(aat) {
+  ls <- levels(cut_interval(Sigs1[AA == aat, DwellTime], 10))
+  ls <- mapply(function(x) {
+    mean(as.numeric(unlist(strsplit(gsub("\\]", "", gsub("\\[", "", gsub("\\(", "", x))), ","))))
+  }, ls)
+  ls <- as.numeric(ls)
+  bin_N <- ls[as.numeric(cut_interval(Sigs1[AA == aat, DwellTime], 10))]
+  mydata <- data.table(x = bin_N)[, .(y = .N), x][order(x)]
+  exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+  timevalues <- mydata[, x]
+  # Counts.exponential2 <- exp(predict(exponential.model, list(x = timevalues)))
+  # plot(mydata, xlab = "Dwell time (ms)", main = "Histogram of dwell time")
+  # lines(timevalues, Counts.exponential2, lwd = 2, col = "red", xlab = "Time (s)", ylab = "Count")
+  coefs <- coef(exponential.model)
+  # summary(exponential.model)
+  # coef(exponential.model)
+  A1 <- exp(coefs[1])
+  t <- - 1 / coefs[2]
+  half_life <- log(0.5) / coefs[2] # half-life
+  model_summ <- summary(exponential.model)
+  A1_Std.Error <- exp(coefs[1] + coefficients(model_summ)[1, 2]) - A1
+  t_Std.Error <- - 1 / (coefs[2] + coefficients(model_summ)[2, 2]) - t
+  half_life_Std.Error <- log(0.5) / (coefs[2] + coefficients(model_summ)[2, 2]) - half_life
+  model_summ$r.squared
+  model_summ$adj.r.squared
+  data.table(A = aat, A1, A1.SE = A1_Std.Error, t, t.SE = t_Std.Error, half.life = half_life, half.life_Std.Error = half_life_Std.Error, R2 = model_summ$r.squared, Adj.R2 = model_summ$adj.r.squared)
+})
+
+PSer_Summa <- merge(DwellTime, FIT)
+setnames(PSer_Summa, "mean", "BlockadeMean")
+setnames(PSer_Summa, "sd", "BlockadeSD")
+PSer_Summa
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+SPTM <- Sigs[SignalCurrentPercent > 80][AA == "P-S + S" & Blockade > 0.1 & Blockade < 0.35]
+setnames(SPTM, "A", "file_id")
+SPTM[, A := ifelse(Blockade < 0.2, "S", "P-S")]
+SPTM_N <- SPTM[, .N, .(file_id, A)]
+SPTM_N[, Replicate := plyr::mapvalues(file_id, c("20231031_0008.1", "20231031_0014.1"), c("Rep1", "Rep2"))]
+```
+
+```{r}
+ggplot(SPTM_N, aes(x = Replicate, y = N, fill = A)) + 
+  geom_col(position = position_dodge2()) + 
+  geom_text(aes(y = N + 20, label = N), position = position_dodge(width = 0.9), size = 4) + 
+  scale_fill_wsj() + 
+  # scale_y_log10() + 
+  labs(y = "Number of signals") + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        legend.title = element_blank(), 
+        axis.title.x = element_blank()) -> p3
+p3
+```
+
+```{r}
+SPTM[, D := NULL]
+SPTM <- split(SPTM, SPTM$A)
+SPTM <- lapply(SPTM, function(x) {
+  data.table(x, D = x[, get_density(x = Blockade, y = log10(DwellTime))])
+})
+SPTM <- do.call(rbind, SPTM)
+```
+
+```{r}
+ggplot(SPTM[SignalCurrentPercent > 80][sample(.N, .N)], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(aes(colour = file_id)) + 
+  ggforce::geom_mark_ellipse(aes(colour = A, label = A, filter = D > 0.1), expand = unit(0, "mm"), con.cap = 0, con.border = "none", con.type = "straight") + 
+  scale_y_log10(limits = c(0.3, 50), breaks = c(0.3, 3, 30)) +
+  facet_wrap(~ AA, ncol = 1, strip.position = "right") + 
+  labs(y = "Dwell time (ms)") + 
+  # scale_colour_brewer(palette = "Paired") + 
+  scale_colour_colorblind() + 
+  scale_x_continuous(limits = c(0.1, 0.35)) + 
+  theme_base() + 
+  theme(plot.background = element_blank(), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(0, 1, 1, 1), "line"), 
+        legend.position = "none") -> p4
+p4
+```
+
+```{r fig.height=11, fig.width=12, echo=FALSE}
+design <- "
+  111
+  111
+  224
+  224
+  334
+"
+p1 + p2 + p4 + p3 + 
+  plot_layout(design = design)
+```
+
+```{r}
+abf <- readRDS("./analysis/81.ABFProcessing/ABF/ABF_20231031_0008.Rds")
+```
+
+```{r}
+SPTM[file_id == "20231031_0008.1", .(S = sum(A == "S"), PSer = sum(A == "P-S")), .(Time = round(StartTime))][order(PSer, decreasing = T)]
+SPTM[file_id == "20231031_0008.1", .(S = sum(A == "S"), PSer = sum(A == "P-S")), .(Time = round(StartTime))][order(S, decreasing = T)]
+```
+
+```{r fig.height=3, fig.width=12, echo=FALSE}
+abf_i <- abf[Time > 798.254 & Time < 798.43]
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step()
+```
+
+```{r}
+SPTM_i <- SPTM[file_id == "20231031_0008.1" & StartTime > 798.254 & StartTime < 798.43]
+```
+
+```{r}
+L0 <- MainRidge(x = abf_i[, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+abf_i[, pA := pA / L0]
+```
+
+```{r}
+RaeSig <- fread("./analysis/81.ABFProcessing/RawSignal/RawSignal_20231031_0008.txt")
+RaeSig <- RaeSig[StartTime > 798.254 & EndTime < 798.43]
+RaeSig$Lab <- c("P-S", "S", "P-S", "", "S", "S", "S", "", "S", "", "S", "S")
+```
+
+```{r fig.height=3, fig.width=12, echo=FALSE}
+ggplot(abf_i, aes(x = Time, y = pA)) + 
+  geom_step() + 
+  geom_text(data = RaeSig, aes(x = StartTime + (EndTime - StartTime)/2, y = SignalCurrent/L0 - .1, label = Lab)) + 
+  scale_x_continuous(breaks = c(abf_i[, min(Time)], abf_i[, min(Time)] + 0.1), labels = c(0, 0.1), expand = c(0, 0)) + 
+  scale_y_continuous(limits = c(0.35, abf_i[, max(pA)]), breaks = c(0.5, 0.75, 1)) + 
+  labs(y = "Standardized current", x = " Recording time (s)") + 
+  theme_base() + 
+  theme(plot.background = element_blank()) -> p5
+p5
+```
+
+
+```{r fig.height=9, fig.width=12, echo=FALSE}
+design <- "
+  113
+  113
+  223
+  444
+"
+p2 + p4 + p3 + p5 + 
+  plot_layout(design = design)
+```
+
+```{r fig.width=6, fig.height=4}
+p3
+ggsave("./analysis/90.UnnaturalPTM/04.PredictedSignalPlot/PSer_N.pdf", width = 6, height = 4)
+```
+
+```{r fig.height=9, fig.width=6, echo=FALSE}
+design <- "
+  1
+  1
+  2
+  3
+"
+p2 + p4 + p5 + 
+  plot_layout(design = design)
+ggsave("./analysis/90.UnnaturalPTM/04.PredictedSignalPlot/PSer.pdf", width = 6, height = 9)
+```

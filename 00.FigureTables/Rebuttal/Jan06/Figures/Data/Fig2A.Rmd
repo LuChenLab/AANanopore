@@ -1,0 +1,94 @@
+---
+title: "Figure 2 a"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+# Signal example
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+```
+
+```{r}
+Sigs1 <- sig0[State == "Sington"]
+SigSumm <- Sigs1[, .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), .(AA, A)]
+SigSumm[, A := gsub("CbC", "CMC", A)]
+SigSumm[, AA := gsub("CbC", "CMC", AA)]
+SigSumm[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+SigSumm[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+SigSumm <- SigSumm[A != "CMC"]
+```
+
+```{r}
+library(MASS)
+library(fitdistrplus)
+FIT <- lapply(SigSumm$A, function(x) {
+  fitdistr(Sigs1[A == x, Blockade], "normal")$estimate
+})
+FIT <- data.table(A = SigSumm$A, as.data.table(do.call(rbind, FIT)))
+```
+
+```{r}
+setkey(SigSumm, A)
+setkey(FIT, A)
+identical(SigSumm$A, FIT$A)
+SigSumm$BlockadeMean <- FIT$mean
+SigSumm$BlockadeSD <- FIT$sd
+```
+
+```{r}
+data <- SigSumm[, .(Class, AminoAcid = A, BlockadeMean, BlockadeSD, Blockade = paste(round(BlockadeMean, 3), "±", round(BlockadeSD, 4)))]
+openxlsx::write.xlsx(data[, 1:4], "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig2A.xlsx", overwrite = T)
+```

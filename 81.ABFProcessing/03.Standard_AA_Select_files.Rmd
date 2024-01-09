@@ -1,0 +1,1492 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(caret)
+library(shiny)
+library(plotly)
+library(ggpubr)
+```
+
+```{r}
+AABlockade <- lapply(list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V2.Rds", full.names = T), function(x) readRDS(x)$Summary)
+AABlockade <- do.call(rbind, AABlockade)
+```
+
+# Ala
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+```
+
+```{r}
+aat <- "Ala"
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+
+# Arg
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+```
+
+```{r}
+aat <- "Arg"
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+
+# Asn
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+```
+
+```{r}
+aat <- "Asn"
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Asp
+
+```{r}
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+```
+
+```{r}
+aat <- "Asp"
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Cys
+
+```{r}
+aat <- "Cys"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# CbC
+
+```{r}
+aat <- "CbC"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Gln
+
+```{r}
+aat <- "Gln"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Glu
+
+```{r}
+aat <- "Glu"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Gly
+
+```{r}
+aat <- "Gly"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Glu
+
+```{r}
+aat <- "Glu"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# His
+
+```{r}
+aat <- "His"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Ile
+
+```{r}
+aat <- "Ile"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Leu
+
+```{r}
+aat <- "Leu"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Lys
+
+```{r}
+aat <- "Lys"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Met
+
+```{r}
+aat <- "Met"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Phe
+
+```{r}
+aat <- "Phe"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Pro
+
+```{r}
+aat <- "Pro"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Ser
+
+```{r}
+aat <- "Ser"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Thr
+
+```{r}
+aat <- "Thr"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Trp
+
+```{r}
+aat <- "Trp"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Tyr
+
+```{r}
+aat <- "Tyr"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+
+# Val
+
+```{r}
+aat <- "Val"
+meta <- fread("./data/MetaInfomation/StandardAA_Meta.txt")
+meta[, sg_files := paste0("./analysis/81.ABFProcessing/SelectedL0/", file_id, ".MainL0.txt")]
+meta <- meta[file.exists(sg_files)]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("analysis/81.ABFProcessing/SelectedL0"))]
+
+sig0 <- lapply(meta[amino_acid == aat & concentration == 0, sg_files], fread)
+sig0 <- do.call(rbind, sig0)
+sig0[, A := as.character(A)]
+setnames(sig0, "A", "file_id")
+sig0[, AA := aat]
+
+sig1 <- lapply(meta[amino_acid == aat & concentration > 0, sg_files], fread)
+sig1 <- do.call(rbind, sig1)
+sig1[, A := as.character(A)]
+setnames(sig1, "A", "file_id")
+sig1[, AA := aat]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r}
+meta[amino_acid == aat & concentration == 0, ]
+meta[amino_acid == aat & concentration != 0, ]
+```
+
+```{r fig.width=22, fig.height=10}
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+  geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+  facet_wrap(~ file_id, nrow = 2)
+```
+
+```{r fig.width=18, fig.height=6}
+ggplot(sig0, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2) + 
+ggplot(sig1, aes(x = Blockade, y = DwellTime * 1000)) + 
+  geom_point(aes(colour = file_id), size = 0.3) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.1, 0.5)) + 
+geom_vline(xintercept = AABlockade[AA == aat, Blockade], colour = 2)
+```
+
+
+```{r}
+nrow(sig0)
+nrow(sig1)
+fwrite(sig0, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_background.txt"), sep = "\t", quote = F)
+fwrite(sig1, paste0("analysis/81.ABFProcessing/SelectedSignals/", aat, "_signal.txt"), sep = "\t", quote = F)
+```
+

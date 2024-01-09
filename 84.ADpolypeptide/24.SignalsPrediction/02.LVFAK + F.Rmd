@@ -1,0 +1,411 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+meta <- as.data.table(openxlsx::read.xlsx("data/ChenShanchuan/20231024/20231024_data.xlsx", sheet = 1))
+meta <- meta[实验目的 == "阿尔兹海默症突变位点" & grepl("20231024", 文件名)]
+colnames(meta) <- c("file_name", "start_time", "end_time", "amino_acid", "file_id", "purpose", "sample", "baseline", "note")
+meta[, file_name := gsub(".abf", "", file_name)]
+setkey(meta, file_name)
+meta <- meta[, .SD[, .(amino_acid, start_time, end_time, file_id = paste0(file_name, ".", seq_len(.N)))], file_name]
+meta <- meta[file_id %in% gsub(".MainL0.txt", "", list.files("./analysis/84.ADpolypeptide/21.SelectedL0"))]
+meta[, sig_file := paste0("./analysis/84.ADpolypeptide/21.SelectedL0/", file_id, ".MainL0.txt")]
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+SigSumm <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+model1 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFKLV/RFmodel.Rds")
+model3 <- readRDS("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/06.Modeling/Version2/L1/SubAAs/ModelAFGKLV/RFmodel.Rds")
+```
+
+```{r}
+Sig_FeatureMatrixs <- mclapply(unique(meta[, file_id]), function(a) {
+  B_file <- gsub("\\.[0-9]", "", a)
+  B_file <- paste0("./analysis/81.ABFProcessing/FeatureMatrix/FeatureMatrix_", B_file, ".txt")
+  do.call(rbind, lapply(B_file, fread))
+}, mc.cores = 20)
+Sig_FeatureMatrixs <- do.call(rbind, Sig_FeatureMatrixs)
+setkey(Sig_FeatureMatrixs, ID)
+```
+
+```{r}
+big_file <- meta[is.na(amino_acid) | amino_acid %in% c("CPA", "peptide"), file_id]
+bgfile <- meta[file_id %in% big_file, sig_file]
+bgsignals <- do.call(rbind, lapply(bgfile, fread))
+bgsignals[, ID := paste0("Noise_", ID)]
+bgsignals <- data.table(bgsignals, D1 = bgsignals[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r }
+LVFAK.selected.signals <- do.call(rbind, lapply(list.files("./analysis/84.ADpolypeptide/23.SelectedSignals", "LVFAK.20231024_000", full.names = TRUE), fread))
+LVFAK.selected.signals <- data.table(LVFAK.selected.signals, D1 = LVFAK.selected.signals[, get_density(x = Blockade, y = log10(DwellTime))])
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = bgsignals[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D1), size = 0.2) + 
+  geom_rect(aes(xmin = bgsignals[, min(Blockade)], xmax = 0.3, ymin = 0.35, ymax = bgsignals[, max(DwellTime)]), fill = NA, colour = "red") + 
+  scale_y_log10() + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p1
+p1
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = LVFAK.selected.signals[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = A, alpha = D1), size = 0.2) + 
+  scale_x_continuous(limits = c(0.11, 0.24)) + 
+  scale_y_log10() + 
+  labs(y = "Dwell time (ms)") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p2
+p2
+```
+
+```{r}
+subtab <- Sig_FeatureMatrixs[LVFAK.selected.signals$ID]
+pred1 <- data.table(ID = subtab$ID, 
+                    Pred1 = as.character(predict(model1, subtab)), 
+                    Prob1 = apply(predict(model1, subtab, type = "prob"), 1, max), 
+                    Delta1 = apply(predict(model1, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))), 
+                    Pred2 = as.character(predict(model3, subtab)), 
+                    Prob2 = apply(predict(model3, subtab, type = "prob"), 1, max), 
+                    Delta2 = apply(predict(model3, subtab, type = "prob"), 1, function(x) -diff(head(sort(x, decreasing = T), 2))))
+```
+
+```{r}
+LVFAK <- merge(LVFAK.selected.signals, pred1, by = "ID")
+```
+
+```{r}
+# fwrite(LVFAK, "./analysis/84.ADpolypeptide/24.SignalsPrediction/LVFAK_prediction.txt", sep = "\t", quote = FALSE)
+```
+
+```{r}
+ggplot() + 
+  geom_point(data = LVFAK[sample(.N, .N)], aes(x = Blockade, y = DwellTime, colour = Pred2, alpha = D1), size = 1) + 
+  scale_y_log10() + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  scale_x_continuous(limits = c(0.11, 0.24)) + 
+  labs(y = "Dwell time (ms)") + 
+  facet_wrap(~ A) + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p3
+p3
+```
+
+
+```{r}
+AADensityPlot1 <- function(x, target, legend = F, adjust = 2) {
+  x <- x[Pred2 %in% x[, .N, Pred2][N > 3, Pred2]]
+  ggplot() +
+    geom_density(data = x, aes(x = Blockade, y = after_stat(count / max(count)), fill = Pred2, colour = Pred2), adjust = adjust, alpha = 0.5) + 
+    scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+    scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+    theme_bw(base_size = 15) + 
+    theme(legend.title = element_blank(), legend.position = ifelse(legend, "right", "none")) + 
+    labs(y = "Relative abundance", x = "blockade") -> p
+  pd <- ggplot_build(p)
+  tab <- as.data.table(pd$data[[1]])[, .SD[which.max(count), ], colour][order(count, decreasing = T), ][colour %in% aa_cols[target]]
+  tab <- merge(tab, data.table(AA = names(aa_cols), colour = aa_cols), by = "colour")
+  p + geom_text_repel(data = tab, aes(x = x, y = y, label = AA, colour = AA), size = 5, direction = "y", nudge_y = .05, min.segment.length = unit(100, "cm")) + 
+    theme(plot.tag = element_text(size = 20, face = "bold"), panel.grid = element_blank())
+}
+LVFAK[, Group := plyr::mapvalues(A, c("20231024_0005.1", "20231024_0007.1"), c("LVFAK", "LVFAK + F"))]
+AADensityPlot1(x = LVFAK[Blockade < 0.25 & Blockade > 0.11], target = c("Phe", "Ala", "Val", "Leu", "Lys")) -> p4
+p4 <- p4 + scale_x_continuous(limits = c(0.11, 0.25))
+p4 + facet_wrap(~ Group)
+```
+
+```{r}
+LVFAK_Freq <- LVFAK[A == "20231024_0005.1", .N, Pred2]
+LVFAK_Freq[, Pred2 := factor(Pred2, levels = LVFAK_Freq[order(N, decreasing = T), Pred2])]
+LVFAK_Freq[, P := round(N / sum(N) * 100, 2)]
+ggplot(LVFAK_Freq, aes(x = Pred2, y = N, fill = Pred2)) + 
+  geom_col() + 
+  geom_text(aes(label = N), position = position_nudge(y = 60)) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Frequency", x = "Predicted amino acid", title = "LVFAK") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p7
+p7
+```
+
+```{r}
+LVFAK_F_Freq <- LVFAK[A == "20231024_0007.1", .N, Pred2]
+LVFAK_F_Freq[, Pred2 := factor(Pred2, levels = LVFAK_F_Freq[order(N, decreasing = T), Pred2])]
+LVFAK_F_Freq[, P := round(N / sum(N) * 100, 2)]
+ggplot(LVFAK_F_Freq, aes(x = Pred2, y = N, fill = Pred2)) + 
+  geom_col() + 
+  geom_text(aes(label = N), position = position_nudge(y = 100)) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(y = "Frequency", x = "Predicted amino acid", title = "LVFAK + F") + 
+  ggthemes::theme_calc(base_size = 15) + 
+  theme(panel.grid = element_blank(), 
+        legend.position = "none", 
+        plot.tag = element_text(size = 20, face = "bold"), 
+        plot.background = element_blank()) -> p8
+p8
+```
+
+```{r}
+p7 + p8
+```
+
+
+```{r}
+setnames(LVFAK, "A", "file_id")
+sig <- split(LVFAK, LVFAK$file_id)
+SigInterTime <- lapply(sig, function(sigi) {
+  print(nrow(sigi))
+  setkey(sigi, StartTime)
+  ol <- as.data.table(findOverlaps(sigi[, IRanges(StartTime * 10000, EndTime * 10000)], sigi[, IRanges(StartTime * 10000, EndTime * 10000)], type = "within"))[queryHits != subjectHits]
+  if(nrow(ol) > 0) {
+    ol <- unique(apply(ol, 1, sort)[1, ])
+    sigi <- sigi[-c(ol)]
+    setkey(sigi, StartTime)
+  }
+  InterTime <- data.table(File = sigi[, unique(file_id)], 
+                          StartTime = sigi[, EndTime][-c(nrow(sigi))], 
+                          EndTime = sigi[, StartTime][-c(1)], 
+                          SigBefore = sigi[, ID][-c(nrow(sigi))], 
+                          SigAfter = sigi[, ID][-c(1)], 
+                          SigBeforeBaseMean = sigi[, BaseMean][-c(nrow(sigi))], 
+                          SigAfterBaseMean = sigi[, BaseMean][-c(1)])
+  
+  filei <- sigi[, unique(file_id)]
+  abf <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", gsub("\\.[0-9]", "", filei), ".Rds"))
+  L0 <- fread(list.files("./analysis/84.ADpolypeptide/21.SelectedL0", sigi[, unique(file_id)], full.names = T))
+  ssd <- abf[Sm >= L0[, min(BaseMean)] & Sm <= L0[, max(BaseMean)], sd(pA)]
+  abf[, L0 := Sm >= L0[, min(BaseMean) - ssd] & Sm <= L0[, max(BaseMean) + ssd]]
+  if(abf[, anyNA(mV)]) {
+    ValidRegion <- IRanges(Rle(abf[, pA < 300 & pA >= 0]))
+  } else {
+    ValidRegion <- IRanges(Rle(abf[, round(mV) == 50]))
+  }
+  
+  Valid <- data.table(satrt = abf[start(ValidRegion), Time], end = abf[end(ValidRegion), Time])
+  InterTime <- InterTime[StartTime %inrange% Valid & EndTime %inrange% Valid]
+  InterTime2 <- mclapply(seq_len(nrow(InterTime)), function(i) {
+    abf[Time > InterTime[i, StartTime] & Time < InterTime[i, EndTime], .(Time1 = diff(range(Time)), Time2 = mean(L0) * diff(range(Time)))]
+  }, mc.cores = 10)
+  InterTime2 <- do.call(rbind, InterTime2)
+  InterTime <- cbind(InterTime, InterTime2)
+  return(InterTime)
+})
+SigInterTime <- do.call(rbind, SigInterTime)
+```
+
+```{r}
+Freq <- merge(LVFAK[, .N, .(Pred2, file_id)], SigInterTime[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File)], by.x = "file_id", by.y = "File")
+Freq[, Group := plyr::mapvalues(file_id, c("20231024_0005.1", "20231024_0007.1"), c("LVFAK", "LVFAK + F"))]
+Freq <- merge(Freq, LVFAK[, .(SigTime = sum(DwellTime)), file_id], by = "file_id")
+Freq[, ValidTime := GapTime2 * 1000 + SigTime]
+Freq[, ValidTime := ValidTime / 1000 / 60]
+Freq[, Pred2 := plyr::mapvalues(Pred2, AMINO_ACID_CODE, names(AMINO_ACID_CODE))]
+```
+
+```{r fig.width=12, fig.height=4}
+ggplot(Freq, aes(x = Group, y = N / ValidTime)) + 
+  geom_col() + 
+  labs(y = expression(Signal~frequency~"("*μM^"-1"*" min"^-1*")")) + 
+  facet_wrap(~ Pred2, scales = "free_y", nrow = 1) + 
+  ggthemes::theme_base()
+```
+
+
+```{r}
+SigInterTime[File == "20231024_0007.1", StartTime := StartTime + SigInterTime[File == "20231024_0005.1", max(EndTime)]]
+SigInterTime[File == "20231024_0007.1", EndTime := EndTime + SigInterTime[File == "20231024_0005.1", max(EndTime)]]
+```
+
+```{r}
+SigInterTime2 <- merge(SigInterTime, LVFAK[, .(ID, Pred2, Group)], by.x = "SigBefore", by.y = "ID")
+i <- SigInterTime2[StartTime > 1616.79796, SigBefore]
+SigInterTime2[SigBefore %in% i, StartTime := StartTime - SigInterTime2[, max(Time1)]]
+SigInterTime2[SigBefore %in% i, EndTime := EndTime - SigInterTime2[, max(Time1)]]
+```
+
+
+```{r}
+ggplot(SigInterTime2, aes(x = StartTime)) + 
+  stat_ecdf(aes(colour = Pred2)) + 
+  geom_vline(xintercept = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+```
+
+```{r}
+ggplot(SigInterTime2, aes(x = StartTime)) + 
+  stat_ecdf(aes(colour = Pred2)) + 
+  geom_vline(xintercept = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+```
+
+```{r fig.width=10, fig.height=6}
+par(mfrow = c(2, 3))
+F1 <- ecdf(SigInterTime2[Pred2 == "Phe", StartTime])
+y <- F1(seq(0, SigInterTime2[Pred2 == "Phe", max(StartTime)], length.out = 1000)) * SigInterTime2[Pred2 == "Phe", .N]
+x <- seq(0, SigInterTime2[Pred2 == "Phe", max(StartTime)], length.out = 1000)
+plot(x, y, main = "Phe", xlab = "Time", ylab = "Count")
+abline(v = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+
+F1 <- ecdf(SigInterTime2[Pred2 == "Ala", StartTime])
+y <- F1(seq(0, SigInterTime2[Pred2 == "Ala", max(StartTime)], length.out = 1000)) * SigInterTime2[Pred2 == "Ala", .N]
+x <- seq(0, SigInterTime2[Pred2 == "Ala", max(StartTime)], length.out = 1000)
+plot(x, y, main = "Ala", xlab = "Time", ylab = "Count")
+abline(v = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+
+F1 <- ecdf(SigInterTime2[Pred2 == "Leu", StartTime])
+y <- F1(seq(0, SigInterTime2[Pred2 == "Leu", max(StartTime)], length.out = 1000)) * SigInterTime2[Pred2 == "Leu", .N]
+x <- seq(0, SigInterTime2[Pred2 == "Leu", max(StartTime)], length.out = 1000)
+plot(x, y, main = "Leu", xlab = "Time", ylab = "Count")
+abline(v = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+
+F1 <- ecdf(SigInterTime2[Pred2 == "Lys", StartTime])
+y <- F1(seq(0, SigInterTime2[Pred2 == "Lys", max(StartTime)], length.out = 1000)) * SigInterTime2[Pred2 == "Lys", .N]
+x <- seq(0, SigInterTime2[Pred2 == "Lys", max(StartTime)], length.out = 1000)
+plot(x, y, main = "Lys", xlab = "Time", ylab = "Count")
+abline(v = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+
+F1 <- ecdf(SigInterTime2[Pred2 == "Val", StartTime])
+y <- F1(seq(0, SigInterTime2[Pred2 == "Val", max(StartTime)], length.out = 1000)) * SigInterTime2[Pred2 == "Val", .N]
+x <- seq(0, SigInterTime2[Pred2 == "Val", max(StartTime)], length.out = 1000)
+plot(x, y, main = "Val", xlab = "Time", ylab = "Count")
+abline(v = SigInterTime2[Group == "LVFAK + F", min(StartTime)])
+```

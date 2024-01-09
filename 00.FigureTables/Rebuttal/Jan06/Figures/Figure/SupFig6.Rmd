@@ -1,0 +1,190 @@
+---
+title: "Supplementary Figure 6"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggthemes)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpmisc)
+library(ggpubr)
+library(caret)
+library(gridExtra)
+```
+
+# a 
+
+```{r}
+mydata <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 1))
+tab <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 2))
+colnames(mydata) <- c("x", "y")
+exponential.model <- lm(log(y + 1) ~ x, data = mydata)
+f <- function(x) exp(predict(exponential.model, list(x = x)))
+```
+
+```{r echo=FALSE}
+ggplot(mydata, aes(x = x, y = y)) + 
+  geom_col(width = 1.9, alpha = 0.5, fill = "#1B9E77") + 
+  stat_function(fun = f, colour = "#1B9E77") + 
+  annotation_custom(tableGrob(tab, rows = NULL, cols = NULL, theme = ttheme_gtbw()), xmin = mydata[, max(x) * 0.5], xmax = mydata[, max(x)], ymin = mydata[, max(y) * 0.5], ymax = mydata[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank()) -> p1
+```
+
+# b
+
+```{r}
+mydata2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 3))
+tab2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 4))
+colnames(mydata2) <- c("x", "y")
+exponential.model2 <- lm(log(y + 1) ~ x, data = mydata2)
+f2 <- function(x) exp(predict(exponential.model2, list(x = x)))
+```
+
+```{r echo=FALSE}
+ggplot(mydata2, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#D95F02") + 
+  stat_function(fun = f2, colour = "#D95F02") + 
+  annotation_custom(tableGrob(tab2, rows = NULL, cols = NULL, theme = ttheme_gtbw()), xmin = mydata2[, max(x) * 0.5], xmax = mydata2[, max(x)], ymin = mydata2[, max(y) * 0.8], ymax = mydata2[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank()) -> p2
+```
+
+# c
+
+```{r}
+mydata3 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 5))
+tab3 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 6))
+colnames(mydata3) <- c("x", "y")
+exponential.model3 <- lm(log(y + 1) ~ x, data = mydata3)
+f3 <- function(x) exp(predict(exponential.model3, list(x = x)))
+```
+
+```{r echo=FALSE}
+ggplot(mydata3, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#7570B3") + 
+  stat_function(fun = f3, colour = "#7570B3") + 
+  annotation_custom(tableGrob(tab3, rows = NULL, cols = NULL, theme = ttheme_gtbw()), xmin = mydata3[, max(x) * 0.5], xmax = mydata3[, max(x)], ymin = mydata3[, max(y) * 0.5], ymax = mydata3[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank()) -> p3
+```
+
+
+# d
+
+```{r}
+mydata4 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 7))
+tab4 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6A-D.xlsx", 8))
+colnames(mydata4) <- c("x", "y")
+exponential.model4 <- lm(log(y + 1) ~ x, data = mydata4)
+f4 <- function(x) exp(predict(exponential.model4, list(x = x)))
+```
+
+```{r echo=FALSE}
+ggplot(mydata4, aes(x = x, y = y)) + 
+  geom_col(alpha = 0.5, fill = "#E7298A") + 
+  stat_function(fun = f4, colour = "#E7298A") + 
+  annotation_custom(tableGrob(tab4, rows = NULL, cols = NULL, theme = ttheme_gtbw()), xmin = mydata4[, max(x) * 0.5], xmax = mydata4[, max(x)], ymin = mydata4[, max(y) * 0.5], ymax = mydata4[, max(y)]) + 
+  labs(x = "Dwell time (ms)", y = "Count") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.position = "none", 
+        panel.grid = element_blank()) -> p4
+```
+
+# e
+
+```{r}
+data1 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6E.xlsx", 1))
+data2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig6E.xlsx", 2))
+```
+
+```{r fig.width=16, fig.height=4}
+a1 <- data.table(StartTime = c(222.6188, 223.1608), EndTime = c(222.6257, 223.1743), ymin = 19.83642, ymax = 122.6807, fill = "#D95F02")
+a2 <- data.table(StartTime = c(222.632), EndTime = c(222.6329), ymin = 19.83642, ymax = 122.6807, fill = "#7570B3")
+a3 <- data.table(StartTime = c(222.8360, 222.9640, 222.9849, 223.0340, 223.0340, 223.1185, 223.4191), 
+                 EndTime = c(222.8446, 222.9646, 222.9868, 223.0735, 223.0735, 223.1193, 223.4262), ymin = 19.83642, ymax = 122.6807, fill = "#E7298A")
+ggplot() + 
+  geom_step(data = data1, mapping = aes(x = Time, y = pA), size = 0.1) + 
+  scale_y_continuous(n.breaks = 4) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), n.breaks = 5, labels = c(0, 0.25, 0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Current (pA)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank()) -> p5_1
+
+p5_1 + geom_rect(data = a1, mapping = aes(xmin = StartTime, xmax = EndTime, ymin = ymin, ymax = ymax), fill = "#D95F02", alpha = 0.2) + 
+  geom_rect(data = a2, mapping = aes(xmin = StartTime, xmax = EndTime, ymin = ymin, ymax = ymax), fill = "#7570B3", alpha = 0.2) + 
+  geom_rect(data = a3, mapping = aes(xmin = StartTime, xmax = EndTime, ymin = ymin, ymax = ymax), fill = "#E7298A", alpha = 0.2) -> p5_1
+```
+
+```{r fig.width=16, fig.height=4}
+b1 <- data.table(StartTime = c(436.5861), EndTime = c(436.5903), ymin = 6.103515, ymax = 118.103, fill = "#7570B3")
+b2 <- data.table(StartTime = c(436.6185, 436.7666, 436.7666, 436.8042, 436.9044, 436.9044), 
+                 EndTime = c(436.6194, 436.7785, 436.7785, 436.8050, 436.9078, 436.9078), ymin = 6.103515, ymax = 118.103, fill = "#E7298A")
+
+ggplot() + 
+  geom_step(data = data2, mapping = aes(x = Time, y = pA), size = 0.1) + 
+  scale_y_continuous(n.breaks = 4) + 
+  scale_x_continuous(expand = c(0.0001, 0.0001), n.breaks = 5, labels = c(0, 0.25, 0.5, 0.75, 1)) + 
+  labs(x = "Time (s)", y = "Current (pA)") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank()) -> p5_2
+p5_2 + geom_rect(data = b1, mapping = aes(xmin = StartTime, xmax = EndTime, ymin = ymin, ymax = ymax), fill = "#7570B3", alpha = 0.2) + 
+  geom_rect(data = b2, mapping = aes(xmin = StartTime, xmax = EndTime, ymin = ymin, ymax = ymax), fill = "#E7298A", alpha = 0.2) -> p5_2
+```
+
+```{r}
+p1 <- p1 + labs(tag = "a")
+p2 <- p2 + labs(tag = "b")
+p3 <- p3 + labs(tag = "c")
+p4 <- p4 + labs(tag = "d")
+p5_1 <- p5_1 + labs(tag = "e")
+```
+
+```{r fig.width=12, fig.height=6, echo=FALSE}
+ps1 <- cowplot::plot_grid(p1, p2, p3, p4, label_size = 20, label_y = 1.02)
+```
+
+```{r fig.width=12, fig.height=14, echo=FALSE}
+cowplot::plot_grid(ps1, p5_1, p5_2, ncol = 1, label_size = 20, rel_heights = c(6, 2, 2), label_y = 1.02)
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/SupFig6.pdf", width = 12, height = 14)
+```

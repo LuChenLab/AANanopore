@@ -1,0 +1,112 @@
+---
+title: "Figure 6 g&h"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(parallel)
+library(caret)
+library(IRanges)
+library(shiny)
+library(plotly)
+library(ggpubr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(Biostrings)
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+SigSumm <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta <- meta[!is.na(amino_acid)]
+```
+
+```{r}
+EAFNL1 <- fread("./analysis/91.RealTimeHydrolysis/04.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL2 <- fread("./analysis/91.RealTimeHydrolysis/34.SignalsPrediction/EAFNL_prediction.txt", sep = "\t")
+EAFNL <- rbind(EAFNL1, EAFNL2)
+EAFNL[, A := as.character(A)]
+EAFNL <- merge(meta, EAFNL, by.x = "file_id", by.y = "A")
+```
+
+```{r}
+LVFAG <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAG_prediction_merge.xlsx"))
+LVFAG <- LVFAG[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LVFAK <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFAK_prediction_merge.xlsx"))
+LVFAK <- LVFAK[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LVFA <- as.data.table(openxlsx::read.xlsx("./analysis/84.ADpolypeptide/60.MergeAll/04.SignalsPrediction/LVFA_prediction_merge.xlsx"))
+LVFA <- LVFA[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+```
+
+```{r}
+LFGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LFGV_prediction.txt", sep = "\t")
+LFGV <- LFGV[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+LSGV <- fread("./analysis/89.Neoantigen/04.SignalsPrediction/LSGV_prediction.txt", sep = "\t")
+LSGV <- LSGV[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred2, Prob = Prob2)]
+```
+
+```{r}
+FHL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FHL_prediction.txt", sep = "\t")
+FHL <- FHL[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+FYSL <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/FYSL_prediction.txt", sep = "\t")
+FYSL <- FYSL[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+LEF <- fread("./analysis/83.Hydrolyzation/04.SignalsPrediction/LEF_prediction.txt", sep = "\t")
+LEF <- LEF[, .(file_id = A, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)]
+```
+
+```{r}
+polyp <- rbind(data.table(PPT = "LVFFAG", LVFAG), 
+               data.table(PPT = "LVFFAK", LVFAK), 
+               data.table(PPT = "LVFFA", LVFA), 
+               data.table(PPT = "LFGV", LFGV), 
+               data.table(PPT = "LSGV", LSGV), 
+               data.table(PPT = "FHL", FHL), 
+               data.table(PPT = "FYSL", FYSL), 
+               data.table(PPT = "LEF", LEF))
+polyp <- rbind(polyp, EAFNL[, .(PPT = seq, file_id, ID, BaseMean, SignalCurrent, DwellTime, Blockade, Pred = Pred1, Prob = Prob1)])
+polyp <- polyp[file_id != "21827012.1"]
+```
+
+```{r}
+openxlsx::write.xlsx(polyp, "./analysis/00.FigureTables/Rebuttal/Nov12/Figures/Data/Fig6GH.xlsx")
+```

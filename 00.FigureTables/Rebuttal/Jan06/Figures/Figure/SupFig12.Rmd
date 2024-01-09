@@ -1,0 +1,206 @@
+---
+title: "Supplementary Figure 12"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+AA_Run1 <- c("Gln", "CMC", "Thr")
+AA_Run2 <- c("Gln", "CMC", "Thr", "Ser", "Ile", "Gly")
+AA_Run3 <- c("Gln", "CMC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met")
+AA_Run4 <- c("Gln", "CMC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met", "Glu")
+AA_Run5 <- c("Gln", "CMC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met", "Glu", "Arg")
+```
+
+
+# a
+
+```{r}
+data1 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12A.xlsx", 1))
+AABlockade <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12A.xlsx", 2))
+```
+
+```{r fig.width=18, fig.height=10}
+ggplot(data1) + 
+  geom_text(aes(x = Blockade, y = DwellTime, colour = AminoAcid, label = AminoAcid)) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0.12, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = guide_legend(title = element_blank())) +
+  labs(y = "Dwell time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "right", 
+        panel.grid = element_blank()) + 
+  facet_wrap(~ Experiment)
+```
+
+
+
+
+```{r fig.width=24, fig.height=5}
+ggplot(data1[Experiment == "Run1"], aes(x = Blockade, y = DwellTime, colour = AminoAcid)) + 
+  geom_vline(xintercept = AABlockade[AminoAcid %in% AA_Run1, BlockadeMean]) + 
+  geom_text(aes(label = AminoAcid), size = 2) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AminoAcid %in% AA_Run1, BlockadeMean], labels = AABlockade[AminoAcid %in% AA_Run1, AminoAcid], limits = c(0.1, 0.3)) +
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(title = "Run1", y = "Dwell time (ms)", tag = "a") + 
+  theme_classic(base_size = 15) + 
+  theme(legend.position = "none", plot.tag = element_text(face = "bold", size = 20), axis.text.x = element_text(angle = 60, hjust = 1)) -> p1
+
+ggplot(data1[Experiment == "Run2"], aes(x = Blockade, y = DwellTime, colour = AminoAcid)) + 
+  geom_vline(xintercept = AABlockade[AminoAcid %in% AA_Run2, BlockadeMean]) + 
+  geom_text(aes(label = AminoAcid), size = 2) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AminoAcid %in% AA_Run2, BlockadeMean], labels = AABlockade[AminoAcid %in% AA_Run2, AminoAcid], limits = c(0.1, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(title = "Run2", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 15) + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 60, hjust = 1)) -> p2
+
+ggplot(data1[Experiment == "Run3"], aes(x = Blockade, y = DwellTime, colour = AminoAcid)) + 
+  geom_vline(xintercept = AABlockade[AminoAcid %in% AA_Run3, BlockadeMean]) + 
+  geom_text(aes(label = AminoAcid), size = 2) + 
+  scale_y_log10() + 
+  scale_x_continuous(breaks = AABlockade[AminoAcid %in% AA_Run3, BlockadeMean], labels = AABlockade[AminoAcid %in% AA_Run3, AminoAcid], limits = c(0.1, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(title = "Run3", y = "Dwell time (ms)") + 
+  theme_classic(base_size = 15) + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 60, hjust = 1)) -> p3
+
+ggplot(data1[Experiment == "Run4"], aes(x = Blockade, y = DwellTime, colour = AminoAcid)) +
+  geom_vline(xintercept = AABlockade[AminoAcid %in% AA_Run4, BlockadeMean]) +
+  geom_text(aes(label = AminoAcid), size = 2) +
+  scale_y_log10() +
+  scale_x_continuous(breaks = AABlockade[AminoAcid %in% AA_Run4, BlockadeMean],labels = AABlockade[AminoAcid %in% AA_Run4, AminoAcid], limits = c(0.1, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(title = "Run4", y = "Dwell time (ms)") +
+  theme_classic(base_size = 15) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 60, hjust = 1)) -> p4
+
+ggplot(data1[Experiment == "Run5"], aes(x = Blockade, y = DwellTime, colour = AminoAcid)) +
+  geom_vline(xintercept = AABlockade[AminoAcid %in% AA_Run5, BlockadeMean]) +
+  geom_text(aes(label = AminoAcid), size = 2) +
+  scale_y_log10() +
+  scale_x_continuous(breaks = AABlockade[AminoAcid %in% AA_Run5, BlockadeMean],labels = AABlockade[AminoAcid %in% AA_Run5, AminoAcid], limits = c(0.1, 0.3)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols) + 
+  labs(title = "Run5", y = "Dwell time (ms)") +
+  theme_classic(base_size = 15) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 60, hjust = 1)) -> p5
+
+p1 + p2 + p3 + p4 + p5 + plot_layout(ncol = 5)
+```
+
+# b 
+
+```{r}
+data2 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12B.xlsx", 1))
+```
+
+```{r fig.width=8, fig.height=6}
+ran_gr <- data2[, .(start = min(Order), end = max(Order)), Experiment]
+setnames(ran_gr, "Experiment", "Run")
+ggplot(data2) +
+  stat_ecdf(aes(Order, colour = AminoAcid)) + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = guide_legend(ncol = 4)) + 
+  labs(x = "Relative time", y = "Cumulative distribution", tag = "b") + 
+  scale_x_continuous(breaks = ran_gr[, start], labels = c(paste(AA_Run1, collapse = "\n"), 
+                                                          paste(setdiff(AA_Run2, AA_Run1), collapse = "\n"), 
+                                                          paste(setdiff(AA_Run3, AA_Run2), collapse = "\n"), 
+                                                          paste(setdiff(AA_Run4, AA_Run3), collapse = "\n"),
+                                                          paste(setdiff(AA_Run5, AA_Run4), collapse = "\n"))) + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        legend.title = element_blank(), 
+        legend.background = element_blank(), 
+        panel.grid = element_blank(), 
+        axis.ticks.x = element_line(arrow = arrow(length = unit(0.3, "line"))), 
+        axis.ticks.length.x = unit(1, 'line'), 
+        axis.text.x = element_text(vjust = 1), 
+        # legend.position = c(0.2, .7), 
+        legend.position = "none", 
+        axis.title.y.right = element_blank()) -> p6
+p6
+```
+
+
+# c
+
+```{r}
+data3 <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12C.xlsx", 1))
+aasumm <- as.data.table(openxlsx::read.xlsx("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12C.xlsx", 2))
+```
+
+```{r fig.height=8, fig.width=24}
+ggplot() + 
+  geom_rect(data = aasumm, aes(xmin = data3[, min(Time)], xmax = data3[, max(Time)], ymin = ymin, ymax = ymax, fill = AminoAcid), alpha = 0.3) + 
+  geom_step(data = data3, mapping = aes(x = Time, y = pA), size = 0.1) + 
+  scale_y_continuous(n.breaks = 5, limits = c(aasumm[, min(ymin)] - 5, data3[, max(pA)]), 
+                     sec.axis = dup_axis(breaks = aasumm[, y], labels = aasumm[, AminoAcid])) +
+  scale_x_continuous(expand = c(0.0001, 0.0001), n.breaks = 5, labels = c(0, 0.25, 0.5, 0.75, 1)) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  labs(x = "Time (s)", y = "Current (pA)", title = "Run5", tag = "c") + 
+  theme_light(base_size = 15) + 
+  theme(plot.tag = element_text(size = 20, face = "bold"), 
+        panel.grid = element_blank(), 
+        axis.title.y.right = element_blank()) -> p7
+p7
+```
+
+
+```{r fig.height=16, fig.width=16, echo=FALSE}
+design <- "
+  112233
+  112233
+  112233
+  445566
+  445566
+  445566
+  777777
+  777777
+  777777
+  777777
+  777777
+"
+p1 + p2 + p3 + p4 + p5 + p6 + p7 + 
+  plot_layout(design = design)
+ggsave("./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Figure/SupFig12.pdf", width = 16, height = 16)
+```
+
+

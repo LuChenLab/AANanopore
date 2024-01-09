@@ -1,0 +1,188 @@
+---
+title: "Interval Time"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(ggpubr)
+```
+
+```{r}
+meta1 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 1, cols = 1:7))
+meta2 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 2, cols = 1:7))
+meta3 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 3, cols = 1:7))
+meta4 <- data.table(openxlsx::read.xlsx("./data/单氨基酸实验信息表20210517.xlsx", sheet = 4, cols = 1:7))
+meta <- rbind(meta1, meta2, meta3, meta4, use.names = FALSE)
+colnames(meta) <- c("file_name", "date", "amino_acid", "concentration", "start_time", "end_time", "type")
+meta[amino_acid == "cys", amino_acid := "Cys"]
+meta <- meta[amino_acid %in% Biostrings::AMINO_ACID_CODE]
+meta <- meta[concentration != 0]
+meta$file_path <- mapply(meta$file_name, FUN = function(x) list.files("./data", recursive = TRUE, full.names = TRUE, pattern = as.character(x))[1])
+meta <- meta[!is.na(file_path)]
+meta[, start_time := as.numeric(start_time)]
+meta[, end_time := as.numeric(end_time)]
+# meta <- meta[!grepl("abf", file_name)]
+meta[, file_name := gsub(".abf$", "", file_name)]
+
+meta_Val <- rbind(data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525.xlsx")), data.table(openxlsx::read.xlsx("./data/meta_info_and_base_line_20210525additional.xlsx")))[amino_acid == "Val"]
+meta_Val$file_path <- mapply(meta_Val$file_name, FUN = function(x) list.files("./data", recursive = TRUE, full.names = TRUE, pattern = as.character(x))[1])
+meta_Val[, L1min := NULL]
+meta_Val[, L1max := NULL]
+meta <- rbind(meta, meta_Val)
+meta <- meta[!grepl("abf", file_name)]
+```
+
+```{r}
+meta1 <- data.table(openxlsx::read.xlsx("./data/ChenShanchuan/20230715/数据记录20230715.xlsx", sheet = 2))
+meta1 <- meta1[实验目的 == "半胱氨酸突变"]
+meta1 <- meta1[, 1:4]
+colnames(meta1) <- c("file_name", "start_time", "end_time", "amino_acid")
+meta1 <- meta1[!is.na(amino_acid)]
+meta1 <- meta1[amino_acid == "CbC"]
+meta1$file_path <- mapply(meta1$file_name, FUN = function(x) list.files("./data", recursive = TRUE, full.names = TRUE, pattern = as.character(x))[1])
+meta1[, start_time := as.numeric(start_time)]
+meta1[, end_time := as.numeric(end_time)]
+meta1 <- meta1[, .(file_name, date = "0407", amino_acid = "CbC", concentration = 20, start_time, end_time, type = paste0("rep", 1:3), file_path)]
+```
+
+```{r}
+meta <- rbind(meta, meta1)
+```
+
+```{r}
+files <- list.files('analysis/61.SignalSelecting/01.StandardAA/03.IntervalTime', full.names = T)
+InteTime <- lapply(files, fread)
+InteTime <- data.table(AA = rep(gsub("_IntervalTime.txt", "", basename(files)), mapply(nrow, InteTime)), do.call(rbind, InteTime))
+```
+
+```{r}
+InteTime <- merge(InteTime, meta[, .(file_name, concentration)], by.x = "File", by.y = "file_name")
+InteTime[, concentration := factor(concentration, levels = c("1", "2", "5", "10", "20", "100", "200"))]
+od <- InteTime[, mean(Time1), AA][order(V1), as.character(AA)]
+InteTime[, AA := factor(AA, levels = od)]
+```
+
+```{r fig.width=12, fig.height=3}
+ggplot(InteTime, aes(x = AA, y = Time2 * 1000, colour = concentration)) + 
+  geom_boxplot() + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Reds", guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+ggplot(InteTime, aes(x = AA, y = Time2 * 1000, colour = concentration)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Reds", guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+```
+
+```{r}
+InteTime_10 <- InteTime[concentration == 10]
+InteTime_10[, AA := factor(AA, levels = InteTime_10[, median(Time2, na.rm = T), AA][order(V1), as.character(AA)])]
+
+ggplot(InteTime_10, aes(x = AA, y = Time2 * 1000)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Reds", guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank())
+
+InteTime_100 <- InteTime[concentration == 100]
+InteTime_100[, AA := factor(AA, levels = InteTime_100[, median(Time2, na.rm = T), AA][order(V1), as.character(AA)])]
+
+ggplot(InteTime_100, aes(x = AA, y = Time2 * 1000)) + 
+  geom_violin() + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.9)) + 
+  scale_y_log10() + 
+  scale_colour_brewer(palette = "Reds", guide = guide_legend(nrow = 1, title = "Concentration (uM)")) + 
+  labs(y = "Interval time (ms)") + 
+  theme_light(base_size = 15) + 
+  theme(legend.position = "top", 
+        axis.title.x = element_blank()) 
+```
+
+```{r}
+InteTime[AA == "Pro", wilcox.test(Time2 ~ concentration)]
+InteTime[AA == "Pro", kruskal.test(Time2 ~ concentration)]
+Ps <- mapply(function(aat) {
+  if(InteTime[AA == aat, length(unique(concentration))] == 1) return("")
+  InteTime[AA == aat, signif(kruskal.test(Time2 ~ concentration)$p.value, 2)]
+}, InteTime[, levels(AA)])
+```
+
+```{r}
+InteTime_Sub <- InteTime[AA %in% AMINO_ACID_CODE[c("D", "E", "K", "R")] & concentration == 100]
+InteTime_Sub <- InteTime[concentration == 100]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("D", "E")], Property := "Negatively charged"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("K", "R", "H")], Property := "Positively charged"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("S", "C", "T", "N", "Q", "Y")], Property := "Polar"]
+InteTime_Sub[AA %in% AMINO_ACID_CODE[c("G", "A", "V", "L", "M", "I", "P", "F", "W")], Property := "Nonpolar"]
+InteTime_Sub[, Property2 := Property]
+InteTime_Sub[Property %in% c("Nonpolar", "Polar"), Property2 := "Uncharged"]
+InteTime_Sub[, Property2 := factor(Property2, levels = c("Negatively charged", "Uncharged", "Positively charged"))]
+```
+
+```{r fig.width=3, fig.height=4}
+ggplot(InteTime_Sub, aes(x = Property2, y = Time2 * 1000, colour = Property2)) + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.3)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)") + 
+  scale_colour_brewer(palette = "Set1", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+
+
+```{r fig.width=3, fig.height=4}
+ggplot(InteTime_Sub[Property2 == "Uncharged"], aes(x = Property, y = Time2 * 1000, colour = Property)) + 
+  geom_boxplot(outlier.shape = NA, width = .5, position = position_dodge(width = 0.3)) + 
+  scale_y_log10() + 
+  labs(y = "Interval time (ms)") + 
+  scale_colour_brewer(palette = "Set2", guide = guide_legend(ncol = 1)) + 
+  # stat_compare_means(method = "anova") +
+  stat_compare_means(aes(label = ..p.signif..), label.y.npc = 0.95) +
+  theme_light(base_size = 15) + 
+  theme(axis.title.x = element_blank(), 
+        legend.position = "none",
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        legend.title = element_blank())
+```
+

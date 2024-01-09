@@ -1,0 +1,151 @@
+---
+title: "AANanopore"
+author: "Chao Tang"
+date: "2022/7/26"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval      = T, # 在块中运行代码(default = TRUE)
+                      highlight = T, # 高亮显示
+                      echo      = F, # 是否在输出中包含源代码
+                      tidy      = T, # 是否整理代码
+                      error     = T, # 是否在输出中包含错误信息
+                      warning   = F, # 是否在输出中包含警告(default = TRUE)
+                      message   = F, # 是否在输出中包含参考的信息
+                      cache.    = F)
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(data.table)
+library(Biostrings)
+library(IRanges)
+library(ggplot2)
+library(parallel)
+library(ggpubr)
+library(mclust)
+library(patchwork)
+library(changepoint)
+library(ggExtra)
+library(tidyr)
+```
+
+# Feature Extraction
+
+## AA
+
+```{r}
+L1_Files <- list.files("./analysis/12.SignalFiltering/Jan07/Filter2", "_Signal1_Mainly_L1.txt", full.names = TRUE)
+L1_Mat <- lapply(L1_Files, fread)
+names(L1_Mat) <- gsub("_Signal1_Mainly_L1.txt", "", basename(L1_Files))
+L1_Mat <- data.table(amino_acid = rep(names(L1_Mat), mapply(nrow, L1_Mat)), do.call(rbind, L1_Mat))
+```
+
+```{r}
+L2_Files <- list.files("./analysis/12.SignalFiltering/Jan07/Filter2", "_Signal1_Mainly_L2.txt", full.names = TRUE)
+L2_Mat <- lapply(L2_Files, fread)
+names(L2_Mat) <- gsub("_Signal1_Mainly_L2.txt", "", basename(L2_Files))
+L2_Mat <- data.table(amino_acid = rep(names(L2_Mat), mapply(nrow, L2_Mat)), do.call(rbind, L2_Mat))
+```
+
+```{r}
+Mat <- rbind(data.table(State = "L1", L1_Mat), data.table(State = "L2", L2_Mat))
+Mat[, Blockade := 1 - SignalCurrent / BaseMean]
+Mat[, Blockade2 := 1 - SignalCurrent.5 / BaseMean]
+```
+
+```{r}
+hist(Mat[L2Ratio > 0, L2Ratio], breaks = 500)
+abline(v = 0.05, col = 2)
+```
+
+```{r fig.width=30, fig.height=3}
+ggplot(Mat[L2Ratio < 0.05], aes(x = L2Ratio, colour = amino_acid)) + 
+  geom_line(stat = "Density") + 
+  facet_grid(State~amino_acid, scales = "free") + 
+  theme(legend.position = "none")
+```
+
+```{r}
+setkey(Mat, file_name, StartTime)
+Mat_List <- split(Mat, Mat[, file_name])
+```
+
+```{r}
+Mat_List <- mclapply(seq_along(Mat_List), function(i) {
+  print(i)
+  Current <- readRDS(paste0("./analysis/11.SignalIdentification/Dec27/SignalCurrent_", names(Mat_List)[i], ".Rds"))
+  Mat <- Mat_List[[i]]
+  Feature_Mat <- lapply(Mat$ID, function(j) {
+    D <- density(Current[ID == j, Current], from = 0, to = 1, n = 500, adjust = 0.5)$y
+    pA <- sort(Current[ID == j, Current])
+    pA <- pA[round(seq(1, length(pA), length.out = 100))]
+    D <- c(D, pA)
+    
+    cbind(t(data.frame(round(D, 4), row.names = c(paste0("X", sprintf("%03d", 1:500)), paste0("P", sprintf("%03d", 1:100))))), 
+          Mat[ID == j, .(DeltaMean, StageSD, CurrentSD, Segments, SignalCurrentPercent, L2Ratio, DwellTime, Blockade, Blockade2, amino_acid, ID)])
+  })
+  do.call(rbind, Feature_Mat)
+}, mc.cores = 10)
+Mat_List <- do.call(rbind, Mat_List)
+```
+
+
+```{r fig.width=20, fig.height=15}
+ggplot(Mat_List, aes(x = Blockade, y = Blockade2)) + 
+  geom_point() + 
+  geom_abline(slope = 1) +
+  facet_wrap(~ amino_acid, scales = "free") + 
+  theme(legend.position = "none")
+```
+
+```{r fig.width=20, fig.height=15}
+ggplot(Mat_List[L2Ratio <= 0], aes(x = Blockade, y = Blockade2)) + 
+  geom_point() + 
+  geom_abline(slope = 1) +
+  facet_wrap(~ amino_acid, scales = "free") + 
+  theme(legend.position = "none")
+```
+
+```{r}
+saveRDS(Mat_List, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Feature_Matrix_of_AA_Signal.Rds")
+```
+
+
+## Background
+
+```{r}
+Sig2 <- fread("./analysis/12.SignalFiltering/Jan07/Filter2/Blank_Signal.txt")
+Sig3 <- Sig2[amino_acid %in% c("Arg", "Asn", "Asp", "Glu", "His", "Ile", "Leu", "Lys", "Phe", "Pro", "Ser", "Thr", "Trp", "Tyr", "Val")]
+Sig3[, Blockade := 1 - SignalCurrent / BaseMean]
+Sig3[, Blockade2 := 1 - SignalCurrent.5 / BaseMean]
+```
+
+```{r}
+Mat_List <- split(Sig3, Sig3[, file_name])
+```
+
+```{r}
+Mat_List <- mclapply(seq_along(Mat_List), function(i) {
+  print(i)
+  Current <- readRDS(paste0("./analysis/11.SignalIdentification/Dec27/SignalCurrent_", names(Mat_List)[i], ".Rds"))
+  Mat <- Mat_List[[i]]
+  Feature_Mat <- lapply(Mat$ID, function(j) {
+    D <- density(Current[ID == j, Current], from = 0, to = 1, n = 500, adjust = 0.5)$y
+    pA <- sort(Current[ID == j, Current])
+    pA <- pA[round(seq(1, length(pA), length.out = 100))]
+    D <- c(D, pA)
+    
+    cbind(t(data.frame(round(D, 4), row.names = c(paste0("X", sprintf("%03d", 1:500)), paste0("P", sprintf("%03d", 1:100))))), 
+          Mat[ID == j, .(DeltaMean, StageSD, CurrentSD, Segments, SignalCurrentPercent, L2Ratio, DwellTime, Blockade, Blockade2, amino_acid, ID)])
+  })
+  do.call(rbind, Feature_Mat)
+}, mc.cores = 10)
+Mat_List <- do.call(rbind, Mat_List)
+```
+
+```{r}
+saveRDS(Mat_List, "./analysis/13.MachineLearning/01.DataPreparation/Jan10/Feature_Matrix_of_Blank_Signal.Rds")
+```
+

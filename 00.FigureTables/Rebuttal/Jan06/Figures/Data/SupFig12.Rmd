@@ -1,0 +1,248 @@
+---
+title: "Supplementary Figure 12"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+Peaks <- function(x, y) {
+  stopifnot(length(x) == length(y))
+  uR <- IRanges(diff(y) >= 0)
+  dR <- IRanges(diff(y) <= 0)
+  res <- do.call(c, lapply(seq_along(uR), function(i) {
+    reduce(c(uR[i], dR[i]))
+  }))
+  
+  Ps <- mapply(seq_along(res), FUN = function(i) {
+    x[start(res[i]):end(res[i])][which.max(y[start(res[i]):end(res[i])])]
+  })
+  Py <- mapply(seq_along(res), FUN = function(i) {
+    max(y[start(res[i]):end(res[i])])
+  })
+  res <- data.table(x = Ps, xmin = x[start(res)], xmax = x[end(res)], y = Py)
+  attr(res, "peaks") <- Ps
+  return(res)
+}
+
+densityPeak <- function(x, bw = 0.01, peaks = 2, n = 1024, from = 0, to = 1, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  dx <- attr(ps, "peaks")
+  dy <- den$y[den$x %in% attr(ps, "peaks")]
+  dy <- dy/max(dy)
+  
+  dx2 <- dx[dx <= dx[which.max(dy)]]
+  dy2 <- dy[dx <= dx[which.max(dy)]]
+  
+  dx2 <- dx2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  dy2 <- dy2[dy2 %in% head(sort(dy2, decreasing = T), peaks)]
+  res <- sort(dx2, decreasing = T)
+  df <- mean(abs(diff(den$y)))
+  CI <- mapply(res, FUN = function(i) {
+    from <- with(den, x[x < i])[max(start(IRanges(diff(with(den, y[x < i])) > mean(abs(diff(with(den, y[x < i])))))))]
+    to <- with(den, x[x > i])[min(end(IRanges(diff(with(den, y[x > i])) < mean(abs(diff(with(den, y[x > i])))))))]
+    min(c(i - from, to - i))
+  })
+  attr(res, "CI") <- CI
+  if(plot) {
+    plot(den)
+    abline(v = res, lty = 2, col = 2)
+    abline(v = res - attr(res,"CI"), lty = 2, col = 3)
+    abline(v = res + attr(res,"CI"), lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+
+MainRidge <- function(x, bw = 0.001, bwstep = NULL, n = 1024, peaks = 2, mingap = 0.01, CI = 0.99, plot = T, ...) {
+  den <- density(x, bw = bw, n = n, ...)
+  ps <- Peaks(den$x, den$y)
+  res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+  res <- na.omit(res)
+  if(peaks > 1) {
+    if(is.null(bwstep)) bwstep <- mingap/10
+    while (nrow(res) > 1 & min(res[, diff(sort(x))]) < mingap) {
+      bw <- bw + bwstep
+      den <- density(x, bw = bw, n = n, ...)
+      ps <- Peaks(den$x, den$y)
+      res <- ps[order(y, decreasing = T)][seq_len(peaks)]
+      res <- na.omit(res)
+    }
+  }
+  if(CI < 1) {
+    new_x <- lapply(seq_len(nrow(res)), function(i) {
+      resy <- with(den, y[x > res[i, xmin] & x < res[i, xmax]])
+      resy <- resy > max(resy) * (1 - CI) + min(resy)
+      resx <- range(with(den, x[x > res[i, xmin] & x < res[i, xmax]])[resy])
+      resx
+    })
+    new_x <- do.call(rbind, new_x)
+    res$xmin <- new_x[, 1]
+    res$xmax <- new_x[, 2]
+  }
+  res$ratio <- mapply(function(i) mean(x >= res$xmin[i] & x <= res$xmax[i]), seq_len(nrow(res)))
+  
+  if(plot) {
+    plot(den)
+    abline(v = res[, x], lty = 2, col = 2)
+    abline(v = res[, xmin], lty = 2, col = 3)
+    abline(v = res[, xmax], lty = 2, col = 3)
+  } else {
+    return(res)
+  }
+}
+```
+
+```{r}
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)], 
+             RColorBrewer::brewer.pal(n = 3, name = "Set2")[1:2])
+aa_cols <- plyr::mapvalues(aa_cols, "#D43F3AFF", RColorBrewer::brewer.pal(n = 8, name = "BrBG")[1])
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC", "His1", "His2")
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CMC", "His1", "His2")
+```
+
+```{r}
+AA_Run1 <- c("Gln", "CbC", "Thr")
+AA_Run2 <- c("Gln", "CbC", "Thr", "Ser", "Ile", "Gly")
+AA_Run3 <- c("Gln", "CbC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met")
+AA_Run4 <- c("Gln", "CbC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met", "Glu")
+AA_Run5 <- c("Gln", "CbC", "Thr", "Ser", "Ile", "Gly", "Ala", "Trp", "Met", "Glu", "Arg")
+```
+
+# a
+
+```{r}
+sgsignals_pred <- fread("./analysis/00.FigureTables/Rebuttal/NatureMethods/Mixture_AminoAcid_Prediction.txt", sep = "\t")
+data <- sgsignals_pred[SignalCurrentPercent > 75 & DiffProb > 0.5, .(Experiment = A, File, ID, StartTime, EndTime, DwellTime, Blockade, AminoAcid = Pred, Probability = Prob, DrltaProbability = DiffProb)]
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", "txt", full.names = T)
+Sigs1 <- lapply(files, fread)
+Sigs1 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow,  Sigs1)), do.call(rbind, Sigs1))
+
+AABlockade <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+AABlockade <- AABlockade[A %in% AA_Run5, .(AminoAcid = A, BlockadeMean)]
+AABlockade[, AminoAcid := gsub("CbC", "CMC", AminoAcid)]
+```
+
+```{r}
+openxlsx::write.xlsx(list(data, AABlockade), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12A.xlsx")
+```
+
+# b
+
+```{r}
+data_hc <- sgsignals_pred[SignalCurrentPercent > 75 & DiffProb > 0.5, ]
+
+retime1 <- data_hc[File == "20230830_0001" & EndTime > 0 * 60][order(StartTime)]
+g01 <- retime1[, min(StartTime)]
+retime1[, StartTime := StartTime - g01]
+retime1[, EndTime := EndTime - g01]
+
+retime2 <- data_hc[File == "20230830_0002"][order(StartTime)]
+g12 <- 10 + retime1[, max(EndTime)] - retime2[, min(StartTime)]
+retime2[, StartTime := StartTime + g12]
+retime2[, EndTime := EndTime + g12]
+
+retime3 <- data_hc[File == "20230830_0003"][order(StartTime)]
+g23 <- 10 + retime2[, max(EndTime)] - retime3[, min(StartTime)]
+retime3[, StartTime := StartTime + g23]
+retime3[, EndTime := EndTime + g23]
+
+retime4 <- data_hc[File == "20230830_0004"][order(StartTime)]
+g34 <- 10 + retime3[, max(EndTime)] - retime4[, min(StartTime)]
+retime4[, StartTime := StartTime + g34]
+retime4[, EndTime := EndTime + g34]
+
+retime5 <- data_hc[File == "20230830_0005"][order(StartTime)]
+g45 <- 10 + retime4[, max(EndTime)] - retime5[, min(StartTime)]
+retime5[, StartTime := StartTime + g45]
+retime5[, EndTime := EndTime + g45]
+
+retime <- rbind(retime1, retime2, retime3, retime4, retime5)
+retime[, Bin := (StartTime + EndTime) / 2]
+retime$Bini <- seq_len(nrow(retime))
+retime[, Pred := as.character(Pred)]
+```
+
+```{r}
+data <- retime[, .(AminoAcid = Pred, Order = Bini, Experiment = A)]
+```
+
+```{r}
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12B.xlsx")
+```
+
+# c
+
+```{r}
+AABlockade <- Sigs1[State == "Sington", .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r fig.height=8, fig.width=24}
+abf5 <- readRDS(paste0("./analysis/81.ABFProcessing/ABF/ABF_", "20230830_0005", ".Rds"))
+time5 <- sgsignals_pred[A == "Run5", .N, round(StartTime)][order(N, decreasing = T)][1, round]
+abf_run5_i <- abf5[Time >= time5 - 0.5 & Time <= time5 + 0.5, ]
+L0 <- MainRidge(x = abf_run5_i[, pA], bw = 0.5, peaks = 1, CI = 0.95, plot = F)[[1]]
+aasumm5 <- AABlockade[A %in% AA_Run5]
+aasumm5[, y := L0 * (1 - BlockadeMean)]
+aasumm5[, ymin := L0 * (1 - BlockadeMean - BlockadeSD)]
+aasumm5[, ymax := L0 * (1 - BlockadeMean + BlockadeSD)]
+aasumm5 <- aasumm5[, .(AminoAcid = A, y, ymin, ymax)]
+aasumm[AminoAcid == "CbC", AminoAcid := "CMC"]
+```
+
+```{r}
+openxlsx::write.xlsx(list(abf_run5_i, aasumm5), "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/SupFig12C.xlsx")
+```

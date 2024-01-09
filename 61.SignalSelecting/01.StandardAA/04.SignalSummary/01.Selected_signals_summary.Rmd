@@ -1,0 +1,196 @@
+---
+title: "Summary"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r warning=FALSE}
+library(factoextra)
+library(data.table)
+library(Biostrings)
+library(patchwork)
+library(ggplot2)
+library(ggrepel)
+library(IRanges)
+library(ggpubr)
+```
+
+```{r}
+aa_cols <- sample(c(RColorBrewer::brewer.pal(n = 12, "Paired"), RColorBrewer::brewer.pal(n = 8, "Dark2")), 20)
+aa_cols <- c(RColorBrewer::brewer.pal(n = 8, "Accent")[-c(1, 4, 5, 8)], 
+             RColorBrewer::brewer.pal(n = 11, "PiYG")[c(4, 9, 11)], 
+             ggsci::pal_aaas()(10), 
+             ggsci::pal_locuszoom()(7)[-c(3, 6, 7)])
+
+names(aa_cols) <- c(AMINO_ACID_CODE[1:20], "CbC")
+```
+
+```{r}
+# Gln
+# CbC, Thr, Ala
+# Ile, Phe, Leu
+# Ser, Trp, 
+# Arg, His
+# 
+# Gln
+# CbC, Thr, Ala
+# Ile, Phe, Leu
+# Ser, Trp, 
+# Glu
+
+Mix1 <- c("Gln", "CbC", "Thr", "Ala", "Ile", "Phe", "Leu", "Ser", "Trp", "Glu")
+Mix2 <- c("Gln", "CbC", "Thr", "Ala", "Ile", "Phe", "Leu", "Ser", "Trp", "Arg", "His")
+```
+
+```{r}
+files <- list.files("./analysis/61.SignalSelecting/01.StandardAA/02.SelectedSignals", "_V5.Rds", full.names = T)
+
+Sigs1 <- lapply(files, function(x) {
+  readRDS(x)[[1]]
+})
+Sigs1 <- do.call(rbind, Sigs1)[State == "Sington"]
+
+SigSumm <- Sigs1[, .(BlockadeSD = sd(Blockade), 
+                     BlockadeMean = mean(Blockade), 
+                     BlockadeMedian = median(Blockade), 
+                     BlockadeQ1 = quantile(Blockade, 1/4), 
+                     BlockadeQ3 = quantile(Blockade, 3/4), 
+                     DwellTimeSD = sd(DwellTime), 
+                     DwellTimeMAD = mad(DwellTime), 
+                     DwellTimeQ1 = quantile(DwellTime, 1/4), 
+                     DwellTimeQ3 = quantile(DwellTime, 3/4), 
+                     DwellTimeMean = mean(DwellTime), 
+                     DwellTimeMedian = median(DwellTime)), A]
+```
+
+```{r}
+ggplot(Sigs1[A %in% c("Arg", "Thr")], aes(x = Blockade, y = DwellTime, colour = A)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+```{r fig.width=20, fig.height=8}
+ggplot(SigSumm, aes(x = BlockadeMean, y = DwellTimeMedian, colour = A)) + 
+  geom_pointrange(aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_text_repel(aes(label = A)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+```{r fig.width=20, fig.height=8}
+ggplot(SigSumm[!A %in% c("His", "Cys")], aes(x = BlockadeMean, y = DwellTimeMedian, colour = A)) + 
+  geom_pointrange(aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_text_repel(aes(label = A)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+```{r}
+ggplot(SigSumm[A %in% Mix1, ], aes(x = BlockadeMean, y = DwellTimeMedian, colour = A)) + 
+  geom_pointrange(aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_text_repel(aes(label = A)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+```{r}
+ggplot(SigSumm[A %in% Mix2, ], aes(x = BlockadeMean, y = DwellTimeMedian, colour = A)) + 
+  geom_pointrange(aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD)) + 
+  geom_pointrange(aes(ymin = DwellTimeQ1, ymax = DwellTimeQ3)) + 
+  geom_text_repel(aes(label = A)) + 
+  labs(x = "Blockade", y = "Dwell time (ms)") + 
+  scale_colour_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light(base_size = 15) + 
+  theme(panel.grid = element_blank())
+```
+
+
+
+```{r}
+ggplot(SigSumm[A %in% Mix1, ], 
+       aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = + 1, fill = A)) +
+  geom_rect(alpha = 0.3) + 
+  scale_x_continuous(breaks = SigSumm[A %in% Mix1, BlockadeMean], labels = SigSumm[A %in% Mix1, A]) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light() + 
+  theme(panel.grid = element_blank())
+```
+
+
+```{r}
+ggplot(SigSumm[A %in% Mix2, ], 
+       aes(xmin = BlockadeMean - BlockadeSD, xmax = BlockadeMean + BlockadeSD, ymin = 0, ymax = + 1, fill = A)) +
+  geom_rect(alpha = 0.3) + 
+  scale_x_continuous(breaks = SigSumm[A %in% Mix2, BlockadeMean], labels = SigSumm[A %in% Mix2, A]) + 
+  scale_fill_manual(breaks = names(aa_cols), values = aa_cols, guide = "none") + 
+  theme_light() + 
+  theme(panel.grid = element_blank())
+```
+
+
+
+
+
+```{r}
+A_V <- data.table(V = c(87.8, 188.2, 120.1, 115.4, 105.4, 140.9, 145.1, 59.9, 156.3, 166.1, 168, 172.7, 165.2, 189.7, 123.3, 91.7, 118.3, 227.9, 191.2, 138.8), 
+                  aa = c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"))
+A_V[, A := plyr::mapvalues(aa, names(AMINO_ACID_CODE), AMINO_ACID_CODE)]
+SigSumm <- merge(SigSumm, A_V, by = "A")
+SigSumm[aa %in% c("E", "D", "H", "R", "K"), Class := "charged"]
+SigSumm[aa %in% c("L", "I", "M", "V", "A", "F", "G", "W", "P"), Class := "nonpolar"]
+SigSumm[aa %in% c("S", "N", "Q", "T", "Y", "C"), Class := "polar"]
+SigSumm[, Class := factor(Class, levels = c("charged", "polar", "nonpolar"))]
+```
+
+
+```{r }
+ggplot(SigSumm, aes(x = V, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = A)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) +
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+
+ggplot(SigSumm[!aa %in% c("D", "E", "K", "R", "H", "C", "P")], aes(x = V, y = BlockadeMean)) + 
+  geom_pointrange(mapping = aes(ymin = BlockadeMean - BlockadeSD, ymax = BlockadeMean + BlockadeSD, colour = Class)) + 
+  geom_smooth(method = "lm", se = F) + 
+  geom_text_repel(aes(label = A)) + 
+  stat_cor(label.y.npc = "bottom", label.x.npc = 0.4, method = "pearson") + 
+  theme_bw(base_size = 15) + 
+  labs(y = "Blockade", x = expression("Volume of amino acid (" *10^"-3"*nm^3*")")) +
+  theme(panel.grid = element_blank(), 
+        legend.box.spacing = unit(0, "line"), 
+        legend.title = element_blank()) + 
+  scale_colour_brewer(palette = "Dark2")
+```
+

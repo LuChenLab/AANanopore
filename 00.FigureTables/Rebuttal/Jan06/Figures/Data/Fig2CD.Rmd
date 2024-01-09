@@ -1,0 +1,81 @@
+---
+title: "Figure 2 c"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+files <- list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/03.GroupedSignals", full.names = T)
+sig0 <- mclapply(files, fread)
+sig0 <- data.table(A = rep(gsub(".signal.txt", "", basename(files)), mapply(nrow, sig0)), do.call(rbind, sig0))
+```
+
+```{r}
+IntervalTime <- do.call(rbind, lapply(list.files("./analysis/81.ABFProcessing/SelectedSignals/01.StandardAA/04.IntervalTime", full.names = T), fread))
+```
+
+```{r}
+time0 <- merge(merge(IntervalTime, sig0[, .(ID, A, file_id, File, State)], by.x = "SigAfter", by.y = "ID"), sig0[, .(ID, A, file_id, File, State)], by.x = "SigBefore", by.y = "ID")
+setnames(time0, "A.x", "A")
+setnames(time0, "file_id.x", "file_id")
+setnames(time0, "File.x", "File")
+```
+
+```{r}
+IntervalTime <- merge(time0[, .(GapTime1 = sum(Time1), GapTime2 = sum(Time2)), .(File, file_id)], sig0[, .(SigTime = sum(DwellTime), N = .N, Sington = sum(State == "Sington"), Mixtrue = sum(State == "Mixtrue")), .(File, file_id)], by = c("File", "file_id"))
+IntervalTime <- merge(IntervalTime, fread("./data/MetaInfomation/StandardAA_Meta.txt"), by.x = c("File", "file_id"), by.y = c("file_name", "file_id"))
+IntervalTime[, ValidTime := GapTime2 * 1000 + SigTime]
+IntervalTime[, ValidTime := ValidTime / 1000 / 60]
+```
+
+```{r}
+IntervalTime[, Freq := N / concentration / ValidTime]
+IntervalTime[, AA := gsub("CbC", "CMC", amino_acid)]
+IntervalTime[AA %in% c(AMINO_ACID_CODE[c("E", "D", "H", "R", "K")], "CMC"), Class := "Charged"]
+IntervalTime[AA %in% AMINO_ACID_CODE[c("L", "I", "M", "V", "A", "F", "G", "W", "P")], Class := "Nonpolar"]
+IntervalTime[AA %in% AMINO_ACID_CODE[c("S", "N", "Q", "T", "Y", "C")], Class := "Polar"]
+IntervalTime[, Class := factor(Class, levels = c("Charged", "Nonpolar", "Polar"))]
+od <- IntervalTime[, median(Freq), .(Class, AA)][order(Class, V1), AA]
+IntervalTime[, AA := factor(AA, levels = od)]
+```
+
+```{r}
+id2rep <- as.data.table(openxlsx::read.xlsx("./data/MetaInfomation/StandardAA_Meta_Rep.xlsx"))
+id2rep[, file_id := gsub("00000001$", "", file_id)]
+id2rep[, file_id := gsub("199999999$", "2", file_id)]
+IntervalTime <- merge(IntervalTime, id2rep[, .(file_id, rep)], by = "file_id")
+IntervalTime <- IntervalTime[, .(Frequency = mean(Freq)), .(Class, AA, rep)]
+```
+
+```{r}
+data <- IntervalTime[AA != "CMC", .(AminoAcid = AA, Experiment = rep, Frequency, Class)]
+data <- data[, .(Experiment = seq_len(.N), Frequency), .(Class, AminoAcid)]
+openxlsx::write.xlsx(data, "./analysis/00.FigureTables/Rebuttal/Jan06/Figures/Data/Fig2CD.xlsx")
+```

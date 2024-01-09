@@ -1,0 +1,97 @@
+---
+title: "Figure 2 D"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      fig.align = 'center')
+knitr::opts_knit$set(root.dir = "/mnt/raid61/Personal_data/tangchao/AANanopore")
+```
+
+```{r required packages}
+library(Biostrings)
+library(data.table)
+library(patchwork)
+library(parallel)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+get_density <- function(x, y, n = 1000, ...) {
+  dens <- MASS::kde2d(x, y, n = n, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii] / max(dens$z[ii]))
+}
+```
+
+```{r}
+meta1 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing.xlsx"))
+meta2 <- as.data.table(openxlsx::read.xlsx("./analysis/91.RealTimeHydrolysis/副本meta_ZhangMing2.xlsx"))
+setnames(meta2, "X9", "seq")
+meta <- rbind(meta1, meta2)[experiment != "EFG Rep1"]
+meta[, sg_files := NULL]
+meta[, sig_files := paste0("./analysis/91.RealTimeHydrolysis/01.SelectedL0/", file_id, ".MainL0.txt")]
+meta[, file.exists(sig_files)]
+meta <- meta[file.exists(sig_files)]
+```
+
+```{r}
+meta[Stage == "Polypeptide"]
+meta[Stage == "Hydrolase"]
+meta[Stage == "Blank"]
+```
+
+```{r}
+Polypeptide <- do.call(rbind, lapply(meta[Stage == "Polypeptide", sig_files], fread))
+Hydrolase <- do.call(rbind, lapply(meta[Stage == "Hydrolase", sig_files], fread))
+Blank <- do.call(rbind, lapply(meta[Stage == "Blank", sig_files], fread))
+Homogenized <- do.call(rbind, lapply(meta[Stage == "Homogenized", sig_files], fread))
+```
+
+```{r}
+Polypeptide$D <- Polypeptide[, get_density(x = Blockade, y = log10(DwellTime))]
+Hydrolase$D <- Hydrolase[, get_density(x = Blockade, y = log10(DwellTime))]
+Blank$D <- Blank[, get_density(x = Blockade, y = log10(DwellTime))]
+Homogenized$D <- Homogenized[, get_density(x = Blockade, y = log10(DwellTime))]
+```
+
+```{r}
+Sigs <- rbind(data.table(Class = "Blank", Blank[A == Blank[, .N, A][which.min(N), A]]), 
+              data.table(Class = "Hydrolase", Hydrolase), 
+              data.table(Class = "Polypeptide", Polypeptide), 
+              data.table(Class = "Hydrolase + Polypeptide", Homogenized))
+Sigs[, Class := factor(Class, levels = c("Blank", "Hydrolase", "Polypeptide", "Hydrolase + Polypeptide"))]
+```
+
+```{r fig.width=12, fig.height=8}
+ggplot(Sigs[DwellTime < 100], aes(x = Blockade, y = DwellTime, alpha = D)) + 
+  geom_point(size = 0.1) + 
+  scale_y_log10() + 
+  scale_x_continuous(limits = c(0, 0.3)) + 
+  facet_wrap(~ Class) + 
+  labs(y = "Dwell time (ms)") + 
+  theme_base(base_size = 22) + 
+  theme(legend.position = "none", 
+        plot.background = element_blank())
+ggsave("./analysis/00.FigureTables/Rebuttal/NatureMethods/Polypeptide_Signal.pdf", width = 12, height = 8)
+```
+
+
+
